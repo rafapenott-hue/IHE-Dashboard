@@ -511,6 +511,20 @@ def get_shopify_cogs(sku):
 
 
 # ─────────────────────────────────────────────────────────────
+# DASHBOARD  (serves dashboard.html at the root URL)
+# ─────────────────────────────────────────────────────────────
+
+@app.route("/")
+def dashboard():
+    html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html")
+    if os.path.exists(html_path):
+        with open(html_path, encoding="utf-8") as f:
+            content = f.read()
+        return content, 200, {"Content-Type": "text/html; charset=utf-8"}
+    return "<h2>dashboard.html not found — add it to the repo root.</h2>", 404
+
+
+# ─────────────────────────────────────────────────────────────
 # HEALTH
 # ─────────────────────────────────────────────────────────────
 

@@ -1,0 +1,1342 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Iberian Ham Express — Sales Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg:           #09090b;
+      --surface:      #111113;
+      --card:         #18181b;
+      --border:       #27272a;
+      --border-sub:   #1f1f23;
+      --text:         #fafafa;
+      --text-2:       #a1a1aa;
+      --text-3:       #52525b;
+      --accent:       #6366f1;
+      --accent-dim:   rgba(99,102,241,.1);
+      --accent-hover: #818cf8;
+      --success:      #22c55e;
+      --success-dim:  rgba(34,197,94,.1);
+      --danger:       #f43f5e;
+      --danger-dim:   rgba(244,63,94,.1);
+      --warning:      #f59e0b;
+      --warning-dim:  rgba(245,158,11,.1);
+      --amazon:       #f59e0b;
+      --shopify:      #5bba6f;
+      --radius:       8px;
+      --radius-sm:    5px;
+      --t:            .15s ease;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* ── SCROLLBAR ─────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: var(--surface); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ── HEADER ────────────────────────────────────────── */
+    .header {
+      height: 52px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .header-left { display: flex; align-items: center; gap: 14px; }
+    .logo {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -.3px;
+      color: var(--text);
+    }
+    .logo-dot { color: var(--accent); }
+    .mode-pill {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .4px;
+      text-transform: uppercase;
+      padding: 2px 8px;
+      border-radius: 20px;
+      border: 1px solid;
+    }
+    .mode-pill.demo { color: var(--warning); border-color: var(--warning-dim); background: var(--warning-dim); }
+    .mode-pill.live { color: var(--success); border-color: var(--success-dim); background: var(--success-dim); display: none; }
+    .header-right { display: flex; align-items: center; gap: 8px; }
+
+    /* ── BUTTONS ───────────────────────────────────────── */
+    .btn {
+      height: 32px;
+      padding: 0 14px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text-2);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all var(--t);
+      white-space: nowrap;
+    }
+    .btn:hover { border-color: var(--text-3); color: var(--text); }
+    .btn-accent {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .btn-accent:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: #fff; }
+
+    /* ── MAIN ──────────────────────────────────────────── */
+    .main { padding: 20px; max-width: 1440px; margin: 0 auto; }
+
+    /* ── FEE BAR ───────────────────────────────────────── */
+    .fee-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 8px 14px;
+      margin-bottom: 16px;
+      font-size: 12px;
+      color: var(--text-3);
+      flex-wrap: wrap;
+    }
+    .fee-bar strong { color: var(--text-2); font-weight: 500; }
+    .fee-sep { color: var(--border); }
+    .fee-tag {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 2px 8px;
+      font-size: 11px;
+      color: var(--text-2);
+    }
+    .fee-tag.amazon-tag { border-color: rgba(245,158,11,.25); color: var(--amazon); }
+    .fee-tag.shopify-tag { border-color: rgba(91,186,111,.25); color: var(--shopify); }
+
+    /* ── DEMO BANNER ───────────────────────────────────── */
+    .demo-banner {
+      background: var(--warning-dim);
+      border: 1px solid rgba(245,158,11,.2);
+      border-radius: var(--radius);
+      padding: 9px 14px;
+      font-size: 12px;
+      color: var(--warning);
+      margin-bottom: 16px;
+    }
+
+    /* ── FILTERS ───────────────────────────────────────── */
+    .filters-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .seg {
+      display: flex;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .seg-btn {
+      padding: 6px 13px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-3);
+      border: none;
+      background: none;
+      cursor: pointer;
+      transition: all var(--t);
+      border-right: 1px solid var(--border);
+    }
+    .seg-btn:last-child { border-right: none; }
+    .seg-btn.active { background: var(--card); color: var(--text); }
+    .seg-btn:hover:not(.active) { color: var(--text-2); }
+
+    /* ── DATE RANGE PICKER ─────────────────────────────────── */
+    .date-range-row {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 4px 10px;
+      height: 34px;
+    }
+    .date-range-row.open { display: flex; }
+    .date-sep { font-size: 11px; color: var(--text-3); }
+    input[type=date] {
+      background: transparent;
+      border: none;
+      color: var(--text-2);
+      font-size: 12px;
+      font-family: inherit;
+      cursor: pointer;
+      outline: none;
+      padding: 2px 4px;
+      border-radius: var(--radius-sm);
+      transition: color var(--t);
+      color-scheme: dark;
+    }
+    input[type=date]:focus { color: var(--text); background: var(--card); }
+    input[type=date]::-webkit-calendar-picker-indicator {
+      filter: invert(0.5);
+      cursor: pointer;
+      opacity: .6;
+    }
+    input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
+    .date-apply-btn {
+      height: 24px;
+      padding: 0 10px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--accent);
+      background: var(--accent-dim);
+      color: var(--accent-hover);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all var(--t);
+      white-space: nowrap;
+    }
+    .date-apply-btn:hover { background: var(--accent); color: #fff; }
+
+    .plat-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 13px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-3);
+      border: none;
+      background: none;
+      cursor: pointer;
+      transition: all var(--t);
+      border-right: 1px solid var(--border);
+    }
+    .plat-btn:last-child { border-right: none; }
+    .plat-btn.active { background: var(--card); color: var(--text); }
+    .plat-btn:hover:not(.active) { color: var(--text-2); }
+
+    .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+    .dot-amz { background: var(--amazon); }
+    .dot-sh  { background: var(--shopify); }
+
+    .filters-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+    .count-label { font-size: 11px; color: var(--text-3); }
+
+    /* ── KPI GRID ──────────────────────────────────────── */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    @media (max-width: 1100px) { .kpi-grid { grid-template-columns: repeat(3,1fr); } }
+    @media (max-width: 640px)  { .kpi-grid { grid-template-columns: repeat(2,1fr); } }
+
+    .kpi {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      transition: border-color var(--t);
+    }
+    .kpi:hover { border-color: var(--text-3); }
+    .kpi-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .5px;
+      text-transform: uppercase;
+      color: var(--text-3);
+      margin-bottom: 10px;
+    }
+    .kpi-val {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -.5px;
+      line-height: 1;
+      margin-bottom: 6px;
+    }
+    .kpi-val.neg  { color: var(--danger); }
+    .kpi-val.warn { color: var(--warning); }
+    .kpi-val.pos  { color: var(--success); }
+    .kpi-val.acc  { color: var(--accent-hover); }
+    .kpi-sub { font-size: 11px; color: var(--text-3); line-height: 1.4; }
+
+    /* ── CHART ROWS ────────────────────────────────────── */
+    .chart-row   { display: grid; gap: 12px; margin-bottom: 12px; }
+    .chart-row-1 { grid-template-columns: 7fr 3fr; }
+    .chart-row-2 { grid-template-columns: 1fr 1fr; }
+    @media (max-width: 900px) { .chart-row-1, .chart-row-2 { grid-template-columns: 1fr; } }
+
+    /* ── CARD ──────────────────────────────────────────── */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition: border-color var(--t);
+    }
+    .card-hdr {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-sub);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .card-title { font-size: 12px; font-weight: 600; color: var(--text); }
+    .card-sub   { font-size: 11px; color: var(--text-3); margin-top: 1px; }
+    .card-body  { padding: 16px; }
+
+    /* ── DONUT ─────────────────────────────────────────── */
+    .donut-wrap { position: relative; width: 160px; height: 160px; margin: 4px auto 12px; }
+    .donut-center {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      pointer-events: none;
+    }
+
+    /* ── WATERFALL ─────────────────────────────────────── */
+    .wf-row { margin-bottom: 10px; }
+    .wf-meta { display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 3px; }
+    .wf-label { color: var(--text-3); }
+    .wf-val   { font-weight: 600; font-size: 12px; }
+    .wf-track { height: 6px; background: var(--surface); border-radius: 3px; overflow: hidden; }
+    .wf-bar   { height: 100%; border-radius: 3px; transition: width .5s ease; }
+    .wf-bar.b-gross { background: var(--accent); }
+    .wf-bar.b-fee   { background: var(--danger); }
+    .wf-bar.b-cogs  { background: var(--warning); }
+    .wf-bar.b-net   { background: var(--success); }
+    .wf-net-row { margin-top: 14px; }
+    .wf-net-row .wf-track { height: 10px; }
+    .wf-margin { font-size: 11px; color: var(--text-3); text-align: right; margin-top: 8px; }
+    .wf-margin strong { color: var(--success); }
+
+    /* ── TABLE ─────────────────────────────────────────── */
+    .tbl-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th {
+      padding: 9px 12px;
+      text-align: left;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .4px;
+      text-transform: uppercase;
+      color: var(--text-3);
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      white-space: nowrap;
+    }
+    td {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--border-sub);
+      color: var(--text-2);
+      vertical-align: middle;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--surface); color: var(--text); }
+    tr.expanded td { background: var(--surface); }
+    tr.sub-row td { background: rgba(99,102,241,.04); border-bottom: 1px solid var(--border-sub); }
+    tr.sub-row:hover td { background: rgba(99,102,241,.07); }
+
+    .plat-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 8px;
+      border-radius: var(--radius-sm);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .3px;
+      text-transform: uppercase;
+    }
+    .plat-badge.amz { background: rgba(245,158,11,.1); color: var(--amazon); border: 1px solid rgba(245,158,11,.2); }
+    .plat-badge.sh  { background: rgba(91,186,111,.1);  color: var(--shopify); border: 1px solid rgba(91,186,111,.2); }
+
+    .cogs-badge {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 3px;
+      letter-spacing: .2px;
+    }
+    .cogs-exact { background: var(--success-dim); color: var(--success); }
+    .cogs-est   { background: var(--warning-dim); color: var(--warning); }
+
+    .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; color: var(--text-3); }
+    .pos-text  { color: var(--success); font-weight: 600; }
+    .neg-text  { color: var(--danger); }
+    .warn-text { color: var(--warning); }
+    .strong    { font-weight: 600; color: var(--text); }
+
+    .expand-btn { color: var(--text-3); font-size: 10px; cursor: pointer; width: 20px; text-align: center; }
+
+    /* ── MODAL ─────────────────────────────────────────── */
+    .overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.7);
+      backdrop-filter: blur(4px);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+    }
+    .overlay.open { display: flex; }
+    .modal {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      width: 500px;
+      max-height: 88vh;
+      overflow-y: auto;
+      box-shadow: 0 24px 64px rgba(0,0,0,.6);
+    }
+    .modal-hdr {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      background: var(--card);
+      z-index: 10;
+    }
+    .modal-title { font-size: 14px; font-weight: 700; color: var(--text); }
+    .modal-close {
+      background: none; border: none;
+      color: var(--text-3); cursor: pointer;
+      width: 28px; height: 28px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: var(--radius-sm);
+      font-size: 18px;
+      transition: all var(--t);
+    }
+    .modal-close:hover { background: var(--surface); color: var(--text); }
+    .modal-body { padding: 20px; }
+    .modal-ftr {
+      padding: 14px 20px;
+      border-top: 1px solid var(--border);
+      display: flex; gap: 8px; justify-content: flex-end;
+      position: sticky; bottom: 0; background: var(--card);
+    }
+
+    .form-section { margin-bottom: 20px; }
+    .form-section-title {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      color: var(--text-3);
+      margin-bottom: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    .form-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .form-group { margin-bottom: 12px; }
+    .form-label { font-size: 11px; font-weight: 600; color: var(--text-2); display: block; margin-bottom: 5px; }
+    .form-hint  { font-size: 10px; color: var(--text-3); margin-top: 3px; }
+    input[type=text], input[type=number], input[type=password] {
+      width: 100%;
+      padding: 7px 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-size: 12px;
+      transition: border-color var(--t);
+    }
+    input:focus { outline: none; border-color: var(--accent); }
+
+    .info-box {
+      background: var(--accent-dim);
+      border: 1px solid rgba(99,102,241,.2);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      font-size: 11px;
+      color: var(--accent-hover);
+      margin-bottom: 14px;
+      line-height: 1.5;
+    }
+    .warn-box {
+      background: var(--warning-dim);
+      border: 1px solid rgba(245,158,11,.2);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      font-size: 11px;
+      color: var(--warning);
+      margin-bottom: 14px;
+      line-height: 1.5;
+    }
+    .code-block {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px;
+      font-family: 'SF Mono','Fira Code',monospace;
+      font-size: 11px;
+      color: #7dd3fc;
+      line-height: 1.7;
+      margin-top: 8px;
+    }
+    .code-comment { color: var(--text-3); }
+
+    /* ── PILL TAG ──────────────────────────────────────── */
+    .tag {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 500;
+      padding: 2px 7px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      color: var(--text-3);
+    }
+  </style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="header">
+  <div class="header-left">
+    <div class="logo">Iberian Ham Express<span class="logo-dot">.</span></div>
+    <span class="mode-pill demo" id="mode-badge">Demo</span>
+    <span class="mode-pill live" id="live-badge">Live</span>
+  </div>
+  <div class="header-right">
+    <button class="btn" onclick="openModal('settings')">Settings</button>
+    <button class="btn btn-accent" onclick="openModal('connect')">Connect APIs</button>
+  </div>
+</header>
+
+<main class="main">
+
+  <!-- Demo banner -->
+  <div class="demo-banner" id="demo-banner">
+    Demo mode — showing simulated data. Click <strong>Connect APIs</strong> to use live Shopify &amp; Amazon data.
+  </div>
+
+  <!-- Fee bar (always visible, auto-applied) -->
+  <div class="fee-bar">
+    <strong>Fees applied automatically</strong>
+    <span class="fee-sep">·</span>
+    <span class="fee-tag amazon-tag" id="fee-amazon-label">Amazon 15% referral</span>
+    <span class="fee-tag shopify-tag" id="fee-shopify-label">Shopify 2% txn</span>
+    <span class="fee-tag" id="fee-stripe-label">Stripe 2.9% + $0.30</span>
+    <span class="fee-sep">·</span>
+    <span style="font-size:11px;color:var(--text-3)" id="fee-cogs-label">COGS $18.00 / unit (default)</span>
+    <button class="btn" style="margin-left:auto;height:24px;padding:0 10px;font-size:10px" onclick="openModal('settings')">Edit rates</button>
+  </div>
+
+  <!-- Filters -->
+  <div class="filters-bar">
+    <div class="seg">
+      <button class="seg-btn" id="tab-today"   onclick="setRange('today')">Today</button>
+      <button class="seg-btn" id="tab-week"    onclick="setRange('week')">Week</button>
+      <button class="seg-btn active" id="tab-month"   onclick="setRange('month')">Month</button>
+      <button class="seg-btn" id="tab-quarter" onclick="setRange('quarter')">90 Days</button>
+      <button class="seg-btn" id="tab-custom"  onclick="setRange('custom')">Custom</button>
+    </div>
+    <div class="date-range-row" id="date-range-row">
+      <input type="date" id="date-start" onchange="autoApplyRange()" />
+      <span class="date-sep">→</span>
+      <input type="date" id="date-end" onchange="autoApplyRange()" />
+      <button class="date-apply-btn" onclick="applyCustomRange()">Apply</button>
+    </div>
+    <div class="seg">
+      <button class="plat-btn active" id="ptab-all"     onclick="setPlatform('all')">All</button>
+      <button class="plat-btn" id="ptab-shopify" onclick="setPlatform('shopify')"><span class="dot dot-sh"></span>Shopify</button>
+      <button class="plat-btn" id="ptab-amazon"  onclick="setPlatform('amazon')"><span class="dot dot-amz"></span>Amazon</button>
+    </div>
+    <div class="filters-right">
+      <span class="count-label" id="count-top"></span>
+      <button class="btn" onclick="render()" style="padding:0 10px">Refresh</button>
+    </div>
+  </div>
+
+  <!-- KPI Cards -->
+  <div class="kpi-grid">
+    <div class="kpi">
+      <div class="kpi-label">Orders</div>
+      <div class="kpi-val" id="kpi-orders">—</div>
+      <div class="kpi-sub" id="kpi-orders-sub"></div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Gross Revenue</div>
+      <div class="kpi-val" id="kpi-gross">—</div>
+      <div class="kpi-sub">Before deductions</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Platform Fees</div>
+      <div class="kpi-val neg" id="kpi-fees">—</div>
+      <div class="kpi-sub" id="kpi-fees-sub"></div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Vendor COGS</div>
+      <div class="kpi-val warn" id="kpi-cogs">—</div>
+      <div class="kpi-sub" id="kpi-cogs-sub"></div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Net Revenue</div>
+      <div class="kpi-val pos" id="kpi-net">—</div>
+      <div class="kpi-sub" id="kpi-net-sub"></div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Vendor Owed</div>
+      <div class="kpi-val acc" id="kpi-vendor">—</div>
+      <div class="kpi-sub">= COGS this period</div>
+    </div>
+  </div>
+
+  <!-- Chart Row 1 -->
+  <div class="chart-row chart-row-1">
+    <div class="card">
+      <div class="card-hdr">
+        <div>
+          <div class="card-title">Orders per Day</div>
+          <div class="card-sub" id="chart-period-label">This Month</div>
+        </div>
+      </div>
+      <div class="card-body" style="height:220px">
+        <canvas id="ordersChart"></canvas>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-hdr">
+        <div class="card-title">Channel Split</div>
+      </div>
+      <div class="card-body" style="display:flex;flex-direction:column;align-items:center">
+        <div class="donut-wrap">
+          <canvas id="revenueDonut"></canvas>
+          <div class="donut-center" id="donut-center"></div>
+        </div>
+        <div id="donut-legend" style="width:100%;font-size:11px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chart Row 2 -->
+  <div class="chart-row chart-row-2">
+    <div class="card">
+      <div class="card-hdr">
+        <div>
+          <div class="card-title">Revenue Breakdown</div>
+          <div class="card-sub">Gross to net</div>
+        </div>
+        <span id="net-margin-tag" class="tag"></span>
+      </div>
+      <div class="card-body">
+        <div class="wf-row">
+          <div class="wf-meta">
+            <span class="wf-label">Gross Revenue</span>
+            <span class="wf-val" id="wf-gross-val"></span>
+          </div>
+          <div class="wf-track"><div class="wf-bar b-gross" id="wf-gross-bar" style="width:0%"></div></div>
+        </div>
+        <div class="wf-row">
+          <div class="wf-meta">
+            <span class="wf-label">Amazon fees (<span id="wf-afee-pct"></span>%)</span>
+            <span class="wf-val neg-text" id="wf-afee-val"></span>
+          </div>
+          <div class="wf-track"><div class="wf-bar b-fee" id="wf-afee-bar" style="width:0%"></div></div>
+        </div>
+        <div class="wf-row">
+          <div class="wf-meta">
+            <span class="wf-label">Shopify txn fee (<span id="wf-sfee-pct"></span>%)</span>
+            <span class="wf-val neg-text" id="wf-sfee-val"></span>
+          </div>
+          <div class="wf-track"><div class="wf-bar b-fee" id="wf-sfee-bar" style="width:0%"></div></div>
+        </div>
+        <div class="wf-row">
+          <div class="wf-meta">
+            <span class="wf-label">Stripe (<span id="wf-stfee-pct"></span>% + $<span id="wf-stfee-fixed"></span>)</span>
+            <span class="wf-val neg-text" id="wf-stfee-val"></span>
+          </div>
+          <div class="wf-track"><div class="wf-bar b-fee" id="wf-stfee-bar" style="width:0%"></div></div>
+        </div>
+        <div class="wf-row">
+          <div class="wf-meta">
+            <span class="wf-label">Vendor COGS ($<span id="wf-cogs-unit"></span>/unit)</span>
+            <span class="wf-val warn-text" id="wf-cogs-val"></span>
+          </div>
+          <div class="wf-track"><div class="wf-bar b-cogs" id="wf-cogs-bar" style="width:0%"></div></div>
+        </div>
+        <div class="wf-row wf-net-row">
+          <div class="wf-meta">
+            <span class="wf-label" style="font-weight:600;color:var(--text)">Net Revenue</span>
+            <span class="wf-val pos-text" id="wf-net-val" style="font-size:15px"></span>
+          </div>
+          <div class="wf-track"><div class="wf-bar b-net" id="wf-net-bar" style="width:0%"></div></div>
+        </div>
+        <div class="wf-margin">Net margin <strong id="wf-net-margin">—</strong></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hdr">
+        <div class="card-title">Platform Comparison</div>
+        <div class="card-sub">Shopify vs Amazon</div>
+      </div>
+      <div class="card-body" style="height:280px">
+        <canvas id="platformChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Orders Table -->
+  <div class="card" style="margin-bottom:24px">
+    <div class="card-hdr">
+      <div class="card-title">Orders</div>
+      <div class="card-sub" id="orders-count"></div>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:24px"></th>
+            <th>Date (ET)</th>
+            <th>Order</th>
+            <th>Channel</th>
+            <th style="text-align:center">Units</th>
+            <th>Customer</th>
+            <th>Gross</th>
+            <th>Platform Fee</th>
+            <th>Stripe</th>
+            <th>COGS</th>
+            <th>Net</th>
+          </tr>
+        </thead>
+        <tbody id="orders-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</main>
+
+<!-- SETTINGS MODAL -->
+<div class="overlay" id="modal-settings">
+  <div class="modal">
+    <div class="modal-hdr">
+      <span class="modal-title">Settings</span>
+      <button class="modal-close" onclick="closeModal('settings')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-section">
+        <div class="form-section-title">Fee Rates</div>
+        <div class="info-box">These defaults match standard Amazon and Shopify rates. Only change if your plan or category differs.</div>
+        <div class="form-row-2">
+          <div class="form-group">
+            <label class="form-label">Amazon Referral (%)</label>
+            <input type="number" id="s-amazonFee" value="15" min="0" max="100" step="0.1" />
+            <div class="form-hint">Typically 8–15% by category</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Shopify Transaction (%)</label>
+            <input type="number" id="s-shopifyFee" value="2" min="0" max="5" step="0.1" />
+            <div class="form-hint">0% with Shopify Payments</div>
+          </div>
+        </div>
+        <div class="form-row-2">
+          <div class="form-group">
+            <label class="form-label">Stripe Fee (%)</label>
+            <input type="number" id="s-stripePct" value="2.9" min="0" step="0.1" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Stripe Fixed ($ / order)</label>
+            <input type="number" id="s-stripeFixed" value="0.30" min="0" step="0.01" />
+          </div>
+        </div>
+      </div>
+      <div class="form-section">
+        <div class="form-section-title">Vendor COGS (fallback)</div>
+        <div class="form-row-2">
+          <div class="form-group">
+            <label class="form-label">Cost per Unit ($)</label>
+            <input type="number" id="s-cogsUnit" value="18" min="0" step="0.01" />
+            <div class="form-hint">Used when SKU not in COGS table</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Avg Units per Order</label>
+            <input type="number" id="s-avgUnits" value="2" min="1" step="1" />
+          </div>
+        </div>
+      </div>
+      <div class="form-section">
+        <div class="form-section-title">API Proxy</div>
+        <div class="form-group">
+          <label class="form-label">Proxy URL</label>
+          <input type="text" id="s-proxyUrl" placeholder="http://localhost:5000" />
+          <div class="form-hint">Leave blank for demo mode. Run api_server.py first.</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-ftr">
+      <button class="btn" onclick="closeModal('settings')">Cancel</button>
+      <button class="btn btn-accent" onclick="saveSettings()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONNECT APIS MODAL -->
+<div class="overlay" id="modal-connect">
+  <div class="modal">
+    <div class="modal-hdr">
+      <span class="modal-title">Connect APIs</span>
+      <button class="modal-close" onclick="closeModal('connect')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="warn-box">
+        Shopify and Amazon APIs require a local proxy due to CORS. Run <strong>api_server.py</strong> first, then enter your credentials below.
+      </div>
+      <div class="form-section">
+        <div class="form-section-title">Shopify</div>
+        <div class="form-group">
+          <label class="form-label">Store URL</label>
+          <input type="text" id="c-shopifyStore" placeholder="your-store.myshopify.com" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Admin API Access Token</label>
+          <input type="password" id="c-shopifyToken" placeholder="shpat_••••••••" />
+          <div class="form-hint">Shopify Admin → Apps → Private Apps</div>
+        </div>
+      </div>
+      <div class="form-section">
+        <div class="form-section-title">Amazon SP-API</div>
+        <div class="form-group">
+          <label class="form-label">Client ID</label>
+          <input type="text" id="c-amazonClientId" placeholder="amzn1.application-oa2-client.••••" />
+        </div>
+        <div class="form-row-2">
+          <div class="form-group">
+            <label class="form-label">Client Secret</label>
+            <input type="password" id="c-amazonClientSecret" placeholder="••••••••" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Refresh Token</label>
+            <input type="password" id="c-amazonRefreshToken" placeholder="Atzr|••••" />
+          </div>
+        </div>
+        <div class="form-row-2">
+          <div class="form-group">
+            <label class="form-label">Marketplace ID</label>
+            <input type="text" id="c-amazonMarketplace" value="ATVPDKIKX0DER" />
+            <div class="form-hint">ATVPDKIKX0DER = US</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Region</label>
+            <input type="text" id="c-amazonRegion" value="us-east-1" />
+          </div>
+        </div>
+      </div>
+      <div class="form-section">
+        <div class="form-section-title">Start the proxy server</div>
+        <div class="code-block">
+          <span class="code-comment"># install once</span><br>
+          pip install flask flask-cors requests<br><br>
+          <span class="code-comment"># run (keep open)</span><br>
+          python api_server.py
+        </div>
+      </div>
+    </div>
+    <div class="modal-ftr">
+      <button class="btn" onclick="closeModal('connect')">Cancel</button>
+      <button class="btn btn-accent" onclick="connectAPIs()">Connect</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── STATE ────────────────────────────────────────────────────
+const S = {
+  range: 'month', platform: 'all', mode: 'demo',
+  customStart: null, customEnd: null,
+  cfg: {
+    amazonFee: 15, shopifyFee: 2, stripePct: 2.9, stripeFixed: 0.30,
+    cogsUnit: 18, avgUnits: 2, proxyUrl: (window.location.protocol !== 'file:' ? window.location.origin : ''),
+    shopifyStore: '', shopifyToken: '',
+    amazonClientId: '', amazonClientSecret: '', amazonRefreshToken: '',
+    amazonMarketplace: 'ATVPDKIKX0DER', amazonRegion: 'us-east-1'
+  },
+  orders: []
+};
+
+// ── DEMO DATA ────────────────────────────────────────────────
+const NAMES = ['James Smith','Maria Garcia','Robert Johnson','Patricia Martinez','John Lopez',
+  'Jennifer Rodriguez','Carlos Hernandez','Sofia Gonzalez','Antonio Perez','Isabella Brown',
+  'Miguel Wilson','Lucia Taylor','David Anderson','Emma Thomas','Laura Jackson'];
+
+const rand = (a,b) => a + Math.random()*(b-a);
+const pick = arr => arr[Math.floor(Math.random()*arr.length)];
+const fmt  = v => '$'+v.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');
+
+function generateDemoOrders() {
+  const out = [], now = new Date();
+  for (let d = 89; d >= 0; d--) {
+    const base = new Date(now.getFullYear(), now.getMonth(), now.getDate()-d);
+    const boost = [0,6].includes(base.getDay()) ? 1.35 : 1;
+    const shN = Math.round(rand(3,11)*boost);
+    const amN = Math.round(rand(2,8)*boost);
+    for (let i=0;i<shN;i++) {
+      const units = 1+Math.floor(rand(0,3));
+      out.push({ id:'SH-'+Math.random().toString(36).substr(2,8).toUpperCase(),
+        platform:'shopify', date: new Date(base.getFullYear(),base.getMonth(),base.getDate(),8+Math.floor(rand(0,14)),Math.floor(rand(0,60))),
+        gross: Math.round(rand(44,95)*units*100)/100, units, customer: pick(NAMES), status:'paid' });
+    }
+    for (let i=0;i<amN;i++) {
+      const units = 1+Math.floor(rand(0,2));
+      out.push({ id:'AMZ-'+Math.random().toString(36).substr(2,10).toUpperCase(),
+        platform:'amazon', date: new Date(base.getFullYear(),base.getMonth(),base.getDate(),8+Math.floor(rand(0,14)),Math.floor(rand(0,60))),
+        gross: Math.round(rand(38,80)*units*100)/100, units, customer:'Amazon Customer', status:'paid' });
+    }
+  }
+  return out.sort((a,b)=>b.date-a.date);
+}
+
+// ── FEE CALC ─────────────────────────────────────────────────
+function calcFees(order) {
+  if (order._cogs !== undefined) {
+    const pf = order._platformFee, sf = order._stripeFee, cogs = order._cogs;
+    return { platformFee: pf, amazonFee: order.platform==='amazon'?pf:0,
+      shopifyFee: order.platform==='shopify'?pf:0,
+      stripeFee: sf, cogs, totalFees: pf+sf+cogs, net: order._net,
+      cogsMethod: order._cogsMethod||'per_sku' };
+  }
+  const c = S.cfg;
+  const amazonFee  = order.platform==='amazon'  ? order.gross*(c.amazonFee/100) : 0;
+  const shopifyFee = order.platform==='shopify' ? order.gross*(c.shopifyFee/100) : 0;
+  const stripeFee  = order.platform==='shopify' ? order.gross*(c.stripePct/100)+c.stripeFixed : 0;
+  const cogs = order.units * c.cogsUnit;
+  const totalFees = amazonFee+shopifyFee+stripeFee+cogs;
+  return { platformFee: amazonFee||shopifyFee, amazonFee, shopifyFee,
+    stripeFee, cogs, totalFees, net: order.gross-totalFees, cogsMethod:'flat_rate' };
+}
+
+// ── FILTER ───────────────────────────────────────────────────
+function filteredOrders() {
+  const now = new Date(); let start, end = now;
+  if (S.range==='custom' && S.customStart) {
+    start = new Date(S.customStart); start.setHours(0,0,0,0);
+    end   = S.customEnd ? new Date(S.customEnd) : now;
+    end.setHours(23,59,59,999);
+  } else if (S.range==='today')   { start=new Date(now.getFullYear(),now.getMonth(),now.getDate()); }
+  else if (S.range==='week')    { start=new Date(now); start.setDate(now.getDate()-now.getDay()); start.setHours(0,0,0,0); }
+  else if (S.range==='month')   { start=new Date(now.getFullYear(),now.getMonth(),1); }
+  else                          { start=new Date(now); start.setDate(now.getDate()-89); start.setHours(0,0,0,0); }
+  return S.orders.filter(o => o.date>=start && o.date<=end &&
+    (S.platform==='all'||o.platform===S.platform));
+}
+
+// ── AGGREGATE ────────────────────────────────────────────────
+function aggregate(orders) {
+  let gross=0,amazonFee=0,shopifyFee=0,stripeFee=0,cogs=0,units=0,shN=0,amN=0;
+  orders.forEach(o => {
+    const f=calcFees(o);
+    gross+=o.gross; amazonFee+=f.amazonFee; shopifyFee+=f.shopifyFee;
+    stripeFee+=f.stripeFee; cogs+=f.cogs; units+=o.units;
+    o.platform==='shopify'?shN++:amN++;
+  });
+  const totalFees=amazonFee+shopifyFee+stripeFee, net=gross-totalFees-cogs;
+  return { total:orders.length,shN,amN,gross,amazonFee,shopifyFee,stripeFee,cogs,totalFees,net,units };
+}
+
+// ── RENDER KPIs ──────────────────────────────────────────────
+function renderKPIs(a) {
+  document.getElementById('kpi-orders').textContent    = a.total.toLocaleString();
+  document.getElementById('kpi-orders-sub').textContent= `${a.shN} Shopify · ${a.amN} Amazon`;
+  document.getElementById('kpi-gross').textContent     = fmt(a.gross);
+  document.getElementById('kpi-fees').textContent      = fmt(a.totalFees);
+  document.getElementById('kpi-fees-sub').textContent  = `Amazon ${fmt(a.amazonFee)} · Shopify ${fmt(a.shopifyFee)} · Stripe ${fmt(a.stripeFee)}`;
+  document.getElementById('kpi-cogs').textContent      = fmt(a.cogs);
+  document.getElementById('kpi-cogs-sub').textContent  = `${a.units.toLocaleString()} units`;
+  document.getElementById('kpi-net').textContent       = fmt(a.net);
+  document.getElementById('kpi-net-sub').textContent   = `${a.gross>0?((a.net/a.gross)*100).toFixed(1):'0'}% margin`;
+  document.getElementById('kpi-vendor').textContent    = fmt(a.cogs);
+  document.getElementById('count-top').textContent     = `${a.total} orders`;
+}
+
+// ── UPDATE FEE BAR ───────────────────────────────────────────
+function updateFeeBar() {
+  const c = S.cfg;
+  document.getElementById('fee-amazon-label').textContent  = `Amazon ${c.amazonFee}% referral`;
+  document.getElementById('fee-shopify-label').textContent = `Shopify ${c.shopifyFee}% txn`;
+  document.getElementById('fee-stripe-label').textContent  = `Stripe ${c.stripePct}% + $${c.stripeFixed.toFixed(2)}`;
+  document.getElementById('fee-cogs-label').textContent    = `COGS $${c.cogsUnit.toFixed(2)}/unit (default)`;
+}
+
+// ── CHARTS ───────────────────────────────────────────────────
+const charts = {};
+const CC = {
+  grid:   'rgba(255,255,255,.04)',
+  tick:   '#52525b',
+  legend: '#a1a1aa',
+};
+
+function renderOrdersChart(orders) {
+  const groups = {};
+  orders.forEach(o => {
+    const k = o.date.toLocaleDateString('en-US',{month:'short',day:'numeric',timeZone:'America/New_York'});
+    if (!groups[k]) groups[k]={sh:0,am:0};
+    o.platform==='shopify' ? groups[k].sh++ : groups[k].am++;
+  });
+  const keys   = Object.keys(groups);
+  const labels = keys.slice(-31);
+  const ctx = document.getElementById('ordersChart').getContext('2d');
+  if (charts.orders) charts.orders.destroy();
+  charts.orders = new Chart(ctx, {
+    type:'bar',
+    data:{ labels,
+      datasets:[
+        {label:'Shopify', data:labels.map(l=>groups[l]?.sh||0), backgroundColor:'rgba(91,186,111,.6)',  borderColor:'#5bba6f', borderWidth:1, borderRadius:3, stack:'s'},
+        {label:'Amazon',  data:labels.map(l=>groups[l]?.am||0), backgroundColor:'rgba(245,158,11,.55)', borderColor:'#f59e0b', borderWidth:1, borderRadius:3, stack:'s'}
+      ]
+    },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ position:'top', labels:{ font:{size:11}, boxWidth:10, color:CC.legend } } },
+      scales:{
+        x:{ stacked:true, grid:{display:false}, ticks:{maxTicksLimit:12,font:{size:10},color:CC.tick} },
+        y:{ stacked:true, grid:{color:CC.grid},  ticks:{font:{size:11},color:CC.tick,stepSize:1} }
+      }
+    }
+  });
+  const lbl = {today:'Today',week:'This Week',month:'This Month',quarter:'Last 90 Days'};
+  let periodLabel = lbl[S.range];
+  if (S.range === 'custom' && S.customStart) {
+    const fmt2 = d => new Date(d+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    periodLabel = fmt2(S.customStart) + (S.customEnd && S.customEnd!==S.customStart ? ' – ' + fmt2(S.customEnd) : '');
+  }
+  document.getElementById('chart-period-label').textContent = periodLabel;
+}
+
+function renderDonut(orders, agg) {
+  const shRev = orders.filter(o=>o.platform==='shopify').reduce((s,o)=>s+o.gross,0);
+  const amRev = orders.filter(o=>o.platform==='amazon').reduce((s,o)=>s+o.gross,0);
+  const ctx = document.getElementById('revenueDonut').getContext('2d');
+  if (charts.donut) charts.donut.destroy();
+  charts.donut = new Chart(ctx, {
+    type:'doughnut',
+    data:{ labels:['Shopify','Amazon'],
+      datasets:[{ data:[shRev,amRev], backgroundColor:['#5bba6f','#f59e0b'], borderWidth:0, hoverOffset:3 }]
+    },
+    options:{ responsive:true, maintainAspectRatio:false, cutout:'72%',
+      plugins:{ legend:{display:false}, tooltip:{callbacks:{label:c=>` ${c.label}: ${fmt(c.raw)}`}} }
+    }
+  });
+  const pct = agg.gross > 0 ? (shRev/agg.gross*100).toFixed(0) : 0;
+  document.getElementById('donut-center').innerHTML =
+    `<div style="font-size:16px;font-weight:700;color:var(--text)">${fmt(agg.gross)}</div>
+     <div style="font-size:10px;color:var(--text-3);margin-top:2px">gross</div>`;
+  document.getElementById('donut-legend').innerHTML =
+    `<div style="display:flex;gap:14px;justify-content:center;color:var(--text-3)">
+      <span><span class="dot dot-sh" style="margin-right:4px;display:inline-block"></span>${fmt(shRev)} (${pct}%)</span>
+      <span><span class="dot dot-amz" style="margin-right:4px;display:inline-block"></span>${fmt(amRev)} (${100-pct}%)</span>
+    </div>`;
+}
+
+function renderWaterfall(agg) {
+  const m = agg.gross || 1;
+  const set = (id,v) => { const el=document.getElementById(id); if(el) el.style.width=Math.max(0,v/m*100)+'%'; };
+  const val = (id,v) => { const el=document.getElementById(id); if(el) el.textContent=v; };
+  set('wf-gross-bar', agg.gross);     val('wf-gross-val', fmt(agg.gross));
+  set('wf-afee-bar',  agg.amazonFee); val('wf-afee-val', '-'+fmt(agg.amazonFee));
+  set('wf-sfee-bar',  agg.shopifyFee);val('wf-sfee-val', '-'+fmt(agg.shopifyFee));
+  set('wf-stfee-bar', agg.stripeFee); val('wf-stfee-val','-'+fmt(agg.stripeFee));
+  set('wf-cogs-bar',  agg.cogs);      val('wf-cogs-val', '-'+fmt(agg.cogs));
+  set('wf-net-bar',   agg.net);       val('wf-net-val',  fmt(agg.net));
+  const mg = agg.gross>0 ? ((agg.net/agg.gross)*100).toFixed(1) : 0;
+  document.getElementById('wf-net-margin').textContent = mg+'%';
+  document.getElementById('net-margin-tag').textContent = mg+'% net margin';
+  const c = S.cfg;
+  document.getElementById('wf-afee-pct').textContent  = c.amazonFee;
+  document.getElementById('wf-sfee-pct').textContent  = c.shopifyFee;
+  document.getElementById('wf-stfee-pct').textContent = c.stripePct;
+  document.getElementById('wf-stfee-fixed').textContent = c.stripeFixed.toFixed(2);
+  document.getElementById('wf-cogs-unit').textContent = c.cogsUnit.toFixed(2);
+}
+
+function renderPlatformChart(orders) {
+  const sh = aggregate(orders.filter(o=>o.platform==='shopify'));
+  const am = aggregate(orders.filter(o=>o.platform==='amazon'));
+  const ctx = document.getElementById('platformChart').getContext('2d');
+  if (charts.platform) charts.platform.destroy();
+  charts.platform = new Chart(ctx, {
+    type:'bar',
+    data:{
+      labels:['Gross','Fees','COGS','Net'],
+      datasets:[
+        {label:'Shopify', data:[sh.gross,sh.totalFees,sh.cogs,sh.net],
+          backgroundColor:'rgba(91,186,111,.45)', borderColor:'#5bba6f', borderWidth:1, borderRadius:4},
+        {label:'Amazon',  data:[am.gross,am.totalFees,am.cogs,am.net],
+          backgroundColor:'rgba(245,158,11,.45)', borderColor:'#f59e0b', borderWidth:1, borderRadius:4}
+      ]
+    },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{position:'top',labels:{font:{size:11},boxWidth:10,color:CC.legend}},
+        tooltip:{callbacks:{label:c=>` ${c.dataset.label}: ${fmt(c.raw)}`}} },
+      scales:{
+        x:{ grid:{display:false}, ticks:{font:{size:11},color:CC.tick} },
+        y:{ grid:{color:CC.grid}, ticks:{font:{size:11},color:CC.tick,callback:v=>'$'+(v>=1000?(v/1000).toFixed(0)+'k':v)} }
+      }
+    }
+  });
+}
+
+// ── TABLE ────────────────────────────────────────────────────
+let expanded = new Set();
+
+function toggleRow(id) {
+  expanded.has(id) ? expanded.delete(id) : expanded.add(id);
+  renderTable(filteredOrders());
+}
+
+function renderTable(orders) {
+  const show = orders.slice(0,100);
+  const rows = [];
+  show.forEach(o => {
+    const f  = calcFees(o);
+    const dt = o.date.toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'});
+    const isExp   = expanded.has(o.id);
+    const hasItems = (o._lineItems||[]).length > 0;
+    const cogsLabel = f.cogsMethod==='per_sku'
+      ? `<span class="cogs-badge cogs-exact">SKU</span>`
+      : f.cogsMethod==='weighted_ratio'
+        ? `<span class="cogs-badge cogs-est">~</span>`
+        : `<span class="cogs-badge" style="background:var(--surface);color:var(--text-3)">avg</span>`;
+
+    rows.push(`<tr ${isExp?'class="expanded"':''} ${hasItems?`style="cursor:pointer" onclick="toggleRow('${o.id}')"`:''}>
+      <td class="expand-btn">${hasItems?(isExp?'▾':'▸'):''}</td>
+      <td style="white-space:nowrap;color:var(--text-3);font-size:11px">${dt}</td>
+      <td class="mono">${o.id}</td>
+      <td><span class="plat-badge ${o.platform==='shopify'?'sh':'amz'}">${o.platform==='shopify'?'Shopify':'Amazon'}</span></td>
+      <td style="text-align:center" class="strong">${o.units}</td>
+      <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px">${o.customer}</td>
+      <td class="strong">${fmt(o.gross)}</td>
+      <td class="neg-text">-${fmt(f.platformFee)}</td>
+      <td class="neg-text">-${fmt(f.stripeFee)}</td>
+      <td class="warn-text" style="white-space:nowrap">-${fmt(f.cogs)} ${cogsLabel}</td>
+      <td class="${f.net>=0?'pos-text':'neg-text'}" style="font-weight:600">${fmt(f.net)}</td>
+    </tr>`);
+
+    if (isExp && hasItems) {
+      (o._lineItems||[]).forEach(li => {
+        const id  = li.sku||li.asin||'';
+        const prc = li.unit_price||0;
+        const cg  = li.cogs||0;
+        const mg  = prc>0 ? ((prc-cg/li.quantity)/prc*100).toFixed(1)+'%' : '—';
+        rows.push(`<tr class="sub-row">
+          <td></td>
+          <td colspan="2" style="padding-left:24px"><span class="mono" style="color:var(--accent)">${id}</span></td>
+          <td colspan="2" style="font-size:11px;color:var(--text-2)">${li.title||''}</td>
+          <td style="text-align:center;font-size:11px">×${li.quantity}</td>
+          <td style="font-size:11px">${fmt(prc)}</td>
+          <td></td><td></td>
+          <td class="warn-text" style="font-size:11px">-${fmt(cg)}</td>
+          <td style="font-size:11px;color:var(--text-3)">${mg}</td>
+        </tr>`);
+      });
+    }
+  });
+  document.getElementById('orders-tbody').innerHTML = rows.join('');
+  document.getElementById('orders-count').textContent =
+    `${show.length} of ${orders.length}${hasItems?' — click row to expand SKUs':''}`;
+
+  function hasItems() { return orders.some(o=>(o._lineItems||[]).length>0); }
+}
+
+// ── MAIN RENDER ──────────────────────────────────────────────
+function render() {
+  const orders = filteredOrders();
+  const agg    = aggregate(orders);
+  renderKPIs(agg);
+  renderOrdersChart(orders);
+  renderDonut(orders, agg);
+  renderWaterfall(agg);
+  renderPlatformChart(orders);
+  renderTable(orders);
+  updateFeeBar();
+}
+
+// ── RANGE / PLATFORM ─────────────────────────────────────────
+function setRange(r) {
+  S.range = r;
+  document.querySelectorAll('.seg-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tab-'+r).classList.add('active');
+  const row = document.getElementById('date-range-row');
+  if (r === 'custom') {
+    row.classList.add('open');
+    // Pre-fill dates if empty: default to current month
+    const dsEl = document.getElementById('date-start');
+    const deEl = document.getElementById('date-end');
+    if (!dsEl.value) {
+      const now = new Date();
+      dsEl.value = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+      deEl.value = now.toISOString().split('T')[0];
+    }
+    S.customStart = document.getElementById('date-start').value;
+    S.customEnd   = document.getElementById('date-end').value;
+  } else {
+    row.classList.remove('open');
+  }
+  render();
+}
+
+function applyCustomRange() {
+  S.customStart = document.getElementById('date-start').value;
+  S.customEnd   = document.getElementById('date-end').value;
+  if (!S.customStart) return;
+  if (S.range !== 'custom') {
+    S.range = 'custom';
+    document.querySelectorAll('.seg-btn').forEach(b=>b.classList.remove('active'));
+    document.getElementById('tab-custom').classList.add('active');
+  }
+  render();
+}
+
+function autoApplyRange() {
+  if (S.range === 'custom') applyCustomRange();
+}
+function setPlatform(p) {
+  S.platform = p;
+  document.querySelectorAll('.plat-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('ptab-'+p).classList.add('active');
+  render();
+}
+
+// ── MODALS ───────────────────────────────────────────────────
+function openModal(id) {
+  if (id==='settings') {
+    document.getElementById('s-amazonFee').value   = S.cfg.amazonFee;
+    document.getElementById('s-shopifyFee').value  = S.cfg.shopifyFee;
+    document.getElementById('s-stripePct').value   = S.cfg.stripePct;
+    document.getElementById('s-stripeFixed').value = S.cfg.stripeFixed;
+    document.getElementById('s-cogsUnit').value    = S.cfg.cogsUnit;
+    document.getElementById('s-avgUnits').value    = S.cfg.avgUnits;
+    document.getElementById('s-proxyUrl').value    = S.cfg.proxyUrl;
+  }
+  if (id==='connect') {
+    document.getElementById('c-shopifyStore').value       = S.cfg.shopifyStore;
+    document.getElementById('c-shopifyToken').value       = S.cfg.shopifyToken;
+    document.getElementById('c-amazonClientId').value     = S.cfg.amazonClientId;
+    document.getElementById('c-amazonClientSecret').value = S.cfg.amazonClientSecret;
+    document.getElementById('c-amazonRefreshToken').value = S.cfg.amazonRefreshToken;
+    document.getElementById('c-amazonMarketplace').value  = S.cfg.amazonMarketplace;
+    document.getElementById('c-amazonRegion').value       = S.cfg.amazonRegion;
+  }
+  document.getElementById('modal-'+id).classList.add('open');
+}
+function closeModal(id) { document.getElementById('modal-'+id).classList.remove('open'); }
+
+function saveSettings() {
+  S.cfg.amazonFee   = +document.getElementById('s-amazonFee').value;
+  S.cfg.shopifyFee  = +document.getElementById('s-shopifyFee').value;
+  S.cfg.stripePct   = +document.getElementById('s-stripePct').value;
+  S.cfg.stripeFixed = +document.getElementById('s-stripeFixed').value;
+  S.cfg.cogsUnit    = +document.getElementById('s-cogsUnit').value;
+  S.cfg.avgUnits    = +document.getElementById('s-avgUnits').value;
+  S.cfg.proxyUrl    = document.getElementById('s-proxyUrl').value.trim().replace(/\/$/,'');
+  closeModal('settings');
+  render();
+}
+
+function connectAPIs() {
+  S.cfg.shopifyStore       = document.getElementById('c-shopifyStore').value.trim();
+  S.cfg.shopifyToken       = document.getElementById('c-shopifyToken').value.trim();
+  S.cfg.amazonClientId     = document.getElementById('c-amazonClientId').value.trim();
+  S.cfg.amazonClientSecret = document.getElementById('c-amazonClientSecret').value.trim();
+  S.cfg.amazonRefreshToken = document.getElementById('c-amazonRefreshToken').value.trim();
+  S.cfg.amazonMarketplace  = document.getElementById('c-amazonMarketplace').value.trim();
+  S.cfg.amazonRegion       = document.getElementById('c-amazonRegion').value.trim();
+  closeModal('connect');
+  if (S.cfg.shopifyStore && S.cfg.shopifyToken) {
+    document.getElementById('mode-badge').style.display = 'none';
+    document.getElementById('live-badge').style.display = '';
+    document.getElementById('demo-banner').style.display = 'none';
+    fetchLiveData(S.cfg.proxyUrl||'http://localhost:5000');
+  } else {
+    alert('Enter at least your Shopify store URL and access token.');
+  }
+}
+
+// ── LIVE DATA ────────────────────────────────────────────────
+async function fetchLiveData(proxy) {
+  const now = new Date();
+  const start = new Date(now); start.setDate(now.getDate()-89); start.setHours(0,0,0,0);
+  const startISO = start.toISOString();
+  document.getElementById('orders-tbody').innerHTML =
+    '<tr><td colspan="11" style="text-align:center;padding:40px;color:var(--text-3)">Loading…</td></tr>';
+  try {
+    const [shResp, amResp] = await Promise.all([
+      fetch(`${proxy}/api/shopify/orders?start=${startISO}`, {
+        headers:{'X-Shopify-Store':S.cfg.shopifyStore,'X-Shopify-Token':S.cfg.shopifyToken}
+      }),
+      S.cfg.amazonClientId ? fetch(`${proxy}/api/amazon/orders?start=${startISO}`, {
+        headers:{
+          'X-Amazon-Client-Id':S.cfg.amazonClientId,
+          'X-Amazon-Client-Secret':S.cfg.amazonClientSecret,
+          'X-Amazon-Refresh-Token':S.cfg.amazonRefreshToken,
+          'X-Amazon-Marketplace':S.cfg.amazonMarketplace,
+          'X-Amazon-Region':S.cfg.amazonRegion
+        }
+      }) : Promise.resolve({json:()=>({orders:[]})})
+    ]);
+    const shData = await shResp.json().catch(()=>({orders:[]}));
+    const amData = await amResp.json().catch(()=>({orders:[]}));
+    if (!Array.isArray(shData.orders)) shData.orders = [];
+    if (!Array.isArray(amData.orders)) amData.orders = [];
+    S.orders = [
+      ...shData.orders.map(o => ({
+        id:o.id, platform:'shopify', date:new Date(o.created_at),
+        gross:o.gross, units:o.units, customer:o.customer, status:o.status,
+        _platformFee:o.platform_fee, _stripeFee:o.stripe_fee,
+        _cogs:o.cogs, _net:o.net, _cogsMethod:'per_sku', _lineItems:o.line_items||[]
+      })),
+      ...amData.orders.map(o => ({
+        id:o.id, platform:'amazon', date:new Date(o.created_at),
+        gross:o.gross, units:o.units, customer:'Amazon Customer', status:o.status,
+        _platformFee:o.platform_fee, _stripeFee:0,
+        _cogs:o.cogs, _net:o.net, _cogsMethod:o.cogs_method||'weighted_ratio', _lineItems:o.line_items||[]
+      }))
+    ].sort((a,b)=>b.date-a.date);
+    render();
+  } catch(e) {
+    alert('Could not reach proxy at '+proxy+'\n\nStart it with: python api_server.py\n\n'+e.message);
+    document.getElementById('mode-badge').style.display = '';
+    document.getElementById('live-badge').style.display = 'none';
+    document.getElementById('demo-banner').style.display = '';
+    S.orders = generateDemoOrders();
+    render();
+  }
+}
+
+// ── INIT ─────────────────────────────────────────────────────
+S.orders = generateDemoOrders();
+render();
+</script>
+</body>
+</html>
