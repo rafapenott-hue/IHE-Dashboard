@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: iberian-ham-dashboard
+    env: python
+    region: ohio          # us-east-1, closest to ET timezone
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn api_server:app --bind 0.0.0.0:$PORT --workers 2 --timeout 60
+    envVars:
+      # ── Shopify ──────────────────────────────────────────────
+      - key: SHOPIFY_STORE
+        sync: false       # set this in Render dashboard (never commit to git)
+      - key: SHOPIFY_TOKEN
+        sync: false
+      # ── Amazon SP-API ─────────────────────────────────────────
+      - key: AMAZON_CLIENT_ID
+        sync: false
+      - key: AMAZON_CLIENT_SECRET
+        sync: false
+      - key: AMAZON_REFRESH_TOKEN
+        sync: false
+      - key: AMAZON_MARKETPLACE_ID
+        value: ATVPDKIKX0DER   # US marketplace (safe to commit)
+      - key: AMAZON_REGION
+        value: us-east-1
+      # ── Fee config ────────────────────────────────────────────
+      - key: AMAZON_FEE_PCT
+        value: "15"
+      - key: SHOPIFY_FEE_PCT
+        value: "2"
+      - key: STRIPE_FEE_PCT
+        value: "2.9"
+      - key: STRIPE_FIXED_FEE
+        value: "0.30"
+      - key: COGS_PER_UNIT
+        value: "18"        # update to your actual cost per unit
+      # ── Telegram ──────────────────────────────────────────────
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
