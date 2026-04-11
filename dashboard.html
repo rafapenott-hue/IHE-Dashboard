@@ -528,19 +528,19 @@ async function init
 <header class="header">
   <div class="header-left">
     <div class="logo">Iberian Ham Express<span class="logo-dot">.</span></div>
-    <span class="mode-pill demo" id="mode-badge">Demo</span>
-    <span class="mode-pill live" id="live-badge">Live</span>
+    <span class="mode-pill demo" id="mode-badge" style="display:none">Demo</span>
+    <span class="mode-pill live" id="live-badge" style="display:inline-block">Live</span>
   </div>
   <div class="header-right">
     <button class="btn" onclick="openModal('settings')">Settings</button>
-    <button class="btn btn-accent" onclick="openModal('connect')">Connect APIs</button>
+    <!-- Connect APIs button removed: APIs auto-configured from server -->
   </div>
 </header>
 
 <main class="main">
 
   <!-- Demo banner -->
-  <div class="demo-banner" id="demo-banner">
+  <div class="demo-banner" id="demo-banner" style="display:none">
     Demo mode — showing simulated data. Click <strong>Connect APIs</strong> to use live Shopify &amp; Amazon data.
   </div>
 
@@ -806,7 +806,7 @@ async function init
 </div>
 
 <!-- CONNECT APIS MODAL -->
-<div class="overlay" id="modal-connect">
+<div class="overlay" id="modal-connect" style="display:none !important">
   <div class="modal">
     <div class="modal-hdr">
       <span class="modal-title">Connect APIs</span>
