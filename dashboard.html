@@ -1304,7 +1304,7 @@ async function fetchLiveData(proxy) {
           'X-Amazon-Marketplace':S.cfg.amazonMarketplace,
           'X-Amazon-Region':S.cfg.amazonRegion
         }
-      }) : Promise.resolve({json:()=>({orders:[]})})
+      }) : Promise.resolve({json:()=>Promise.resolve({orders:[]})})
     ]);
     const shData = await shResp.json().catch(()=>({orders:[]}));
     const amData = await amResp.json().catch(()=>({orders:[]}));
@@ -1356,6 +1356,7 @@ async function init() {
         S.cfg.shopifyStore  = conf.shopify_store || '';
         S.cfg.amazonMarketplace = conf.amazon_marketplace || 'ATVPDKIKX0DER';
         S.cfg.amazonRegion      = conf.amazon_region || 'us-east-1';
+              S.cfg.amazonClientId = 'proxy';
         document.getElementById('mode-badge').style.display  = 'none';
         document.getElementById('live-badge').style.display  = 'inline-block';
         document.getElementById('demo-banner').style.display = 'none';
