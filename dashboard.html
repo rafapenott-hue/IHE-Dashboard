@@ -1335,8 +1335,39 @@ async function fetchLiveData(proxy) {
 }
 
 // ── INIT ─────────────────────────────────────────────────────
-S.orders = generateDemoOrders();
-render();
+async function init() {
+  // If served from a real server (not file://), try to auto-connect
+  if (window.location.protocol !== 'file:') {
+    try {
+      const res  = await fetch('/api/config');
+      const conf = await res.json();
+      // Apply server-side fee config
+      if (conf.fees) {
+        S.cfg.amazonFee   = conf.fees.amazon_fee;
+        S.cfg.shopifyFee  = conf.fees.shopify_fee;
+        S.cfg.stripePct   = conf.fees.stripe_pct;
+        S.cfg.stripeFixed = conf.fees.stripe_fixed;
+        S.cfg.cogsUnit    = conf.fees.cogs_per_unit;
+      }
+      if (conf.shopify_configured) {
+        // Credentials live on the server — go live automatically
+        S.cfg.proxyUrl      = window.location.origin;
+        S.cfg.shopifyStore  = conf.shopify_store || '';
+        S.cfg.amazonMarketplace = conf.amazon_marketplace || 'ATVPDKIKX0DER';
+        S.cfg.amazonRegion      = conf.amazon_region || 'us-east-1';
+        document.getElementById('mode-badge').style.display  = 'none';
+        document.getElementById('live-badge').style.display  = '';
+        document.getElementById('demo-banner').style.display = 'none';
+        await fetchLiveData(window.location.origin);
+        return;
+      }
+    } catch(e) { /* fall through to demo */ }
+  }
+  S.orders = generateDemoOrders();
+  render();
+}
+
+init();
 </script>
 </body>
 </html>

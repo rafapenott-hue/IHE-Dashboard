@@ -511,11 +511,78 @@ def get_shopify_cogs(sku):
 
 
 # ─────────────────────────────────────────────────────────────
+# PASSWORD PROTECTION
+# ─────────────────────────────────────────────────────────────
+
+DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
+
+def _check_auth(req):
+    """Return True if request carries a valid session token."""
+    if not DASHBOARD_PASSWORD:
+        return True   # no password set → open access
+    token = req.cookies.get("ihe_token", "")
+    return token == DASHBOARD_PASSWORD
+
+def _login_page(error=False):
+    err_html = '<p style="color:#f43f5e;margin-top:12px;font-size:13px">Incorrect password</p>' if error else ''
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Iberian Ham Express</title>
+<style>
+  *{{box-sizing:border-box;margin:0;padding:0}}
+  body{{background:#09090b;color:#fafafa;font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
+       display:flex;align-items:center;justify-content:center;min-height:100vh}}
+  .box{{background:#18181b;border:1px solid #27272a;border-radius:12px;padding:40px;width:340px;text-align:center}}
+  .logo{{font-size:18px;font-weight:700;letter-spacing:-.3px;margin-bottom:6px}}
+  .logo span{{color:#6366f1}}
+  .sub{{font-size:12px;color:#52525b;margin-bottom:28px}}
+  input{{width:100%;padding:10px 12px;background:#111113;border:1px solid #27272a;border-radius:6px;
+         color:#fafafa;font-size:14px;outline:none;transition:border .15s}}
+  input:focus{{border-color:#6366f1}}
+  button{{margin-top:12px;width:100%;padding:10px;background:#6366f1;border:none;border-radius:6px;
+          color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:background .15s}}
+  button:hover{{background:#818cf8}}
+</style></head>
+<body><div class="box">
+  <div class="logo">Iberian Ham Express<span>.</span></div>
+  <div class="sub">Sales Dashboard</div>
+  <form method="POST" action="/login">
+    <input type="password" name="password" placeholder="Enter password" autofocus />
+    <button type="submit">Sign in</button>
+    {err_html}
+  </form>
+</div></body></html>"""
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    from flask import make_response, redirect
+    if request.method == "POST":
+        pwd = request.form.get("password", "")
+        if pwd == DASHBOARD_PASSWORD:
+            resp = make_response(redirect("/"))
+            resp.set_cookie("ihe_token", pwd, max_age=60*60*24*30, httponly=True, samesite="Lax")
+            return resp
+        return _login_page(error=True), 401
+    return _login_page()
+
+@app.route("/logout")
+def logout():
+    from flask import make_response, redirect
+    resp = make_response(redirect("/login"))
+    resp.delete_cookie("ihe_token")
+    return resp
+
+
+# ─────────────────────────────────────────────────────────────
 # DASHBOARD  (serves dashboard.html at the root URL)
 # ─────────────────────────────────────────────────────────────
 
 @app.route("/")
 def dashboard():
+    from flask import redirect
+    if DASHBOARD_PASSWORD and not _check_auth(request):
+        return redirect("/login")
     html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html")
     if os.path.exists(html_path):
         with open(html_path, encoding="utf-8") as f:
@@ -525,8 +592,40 @@ def dashboard():
 
 
 # ─────────────────────────────────────────────────────────────
+# CONFIG  (tells dashboard which credentials are pre-loaded)
+# ─────────────────────────────────────────────────────────────
+
+@app.route("/api/config")
+def api_config():
+    from flask import redirect
+    if DASHBOARD_PASSWORD and not _check_auth(request):
+        return redirect("/login")
+    return jsonify({
+        "shopify_configured":  bool(os.environ.get("SHOPIFY_STORE") and os.environ.get("SHOPIFY_TOKEN")),
+        "amazon_configured":   bool(os.environ.get("AMAZON_CLIENT_ID") and os.environ.get("AMAZON_REFRESH_TOKEN")),
+        "shopify_store":       os.environ.get("SHOPIFY_STORE", ""),
+        "amazon_marketplace":  os.environ.get("AMAZON_MARKETPLACE_ID", "ATVPDKIKX0DER"),
+        "amazon_region":       os.environ.get("AMAZON_REGION", "us-east-1"),
+        "fees": {
+            "amazon_fee":   float(os.environ.get("AMAZON_FEE_PCT",    "15")),
+            "shopify_fee":  float(os.environ.get("SHOPIFY_FEE_PCT",   "2")),
+            "stripe_pct":   float(os.environ.get("STRIPE_FEE_PCT",    "2.9")),
+            "stripe_fixed": float(os.environ.get("STRIPE_FIXED_FEE",  "0.30")),
+            "cogs_per_unit":float(os.environ.get("COGS_PER_UNIT",     "18")),
+        }
+    })
+
+
+# ─────────────────────────────────────────────────────────────
 # HEALTH
 # ─────────────────────────────────────────────────────────────
+
+def require_auth():
+    """Call at the top of any API route that needs protection."""
+    from flask import redirect
+    if DASHBOARD_PASSWORD and not _check_auth(request):
+        return jsonify({"error": "unauthorized"}), 401
+    return None
 
 @app.route("/api/health")
 def health():
