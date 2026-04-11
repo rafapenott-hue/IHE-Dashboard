@@ -9,6 +9,7 @@
     :root {
       --bg:           #09090b;
       --surface:      #111113;
+async function init
       --card:         #18181b;
       --border:       #27272a;
       --border-sub:   #1f1f23;
@@ -1275,7 +1276,7 @@ function connectAPIs() {
   closeModal('connect');
   if (S.cfg.shopifyStore && S.cfg.shopifyToken) {
     document.getElementById('mode-badge').style.display = 'none';
-    document.getElementById('live-badge').style.display = '';
+    document.getElementById('live-badge').style.display = 'inline-block';
     document.getElementById('demo-banner').style.display = 'none';
     fetchLiveData(S.cfg.proxyUrl||'http://localhost:5000');
   } else {
@@ -1356,7 +1357,7 @@ async function init() {
         S.cfg.amazonMarketplace = conf.amazon_marketplace || 'ATVPDKIKX0DER';
         S.cfg.amazonRegion      = conf.amazon_region || 'us-east-1';
         document.getElementById('mode-badge').style.display  = 'none';
-        document.getElementById('live-badge').style.display  = '';
+        document.getElementById('live-badge').style.display  = 'inline-block';
         document.getElementById('demo-banner').style.display = 'none';
         await fetchLiveData(window.location.origin);
         return;
