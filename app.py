@@ -105,7 +105,7 @@ def fee_cfg() -> dict:
 
 def shopify_fetch(store: str, token: str, created_at_min: str) -> list:
     store  = store.replace("https://", "").replace("http://", "").rstrip("/")
-    url    = f"https://{store}/admin/api/2024-01/orders.json"
+    url    = f"https://{store}/admin/api/2025-01/orders.json"
     hdrs   = {"X-Shopify-Access-Token": token}
     params = {
         "status":          "any",
