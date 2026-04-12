@@ -109,6 +109,7 @@ def shopify_fetch(store: str, token: str, created_at_min: str) -> list:
     hdrs   = {"X-Shopify-Access-Token": token}
     params = {
         "status":          "any",
+        "financial_status": "paid",
         "created_at_min":  created_at_min,
         "limit":           250,
         # include line_items so we can do per-SKU COGS
