@@ -113,7 +113,7 @@ def shopify_fetch(store: str, token: str, created_at_min: str) -> list:
         "created_at_min":  created_at_min,
         "limit":           250,
         # include line_items so we can do per-SKU COGS
-        "fields": "id,order_number,created_at,total_price,financial_status,"
+        "fields": "id,order_number,created_at,total_price,financial_status,cancelled_at,"
                   "billing_address,line_items",
     }
     orders = []
@@ -131,6 +131,8 @@ def shopify_fetch(store: str, token: str, created_at_min: str) -> list:
             break
         url    = next_url
         params = {}
+    # Exclude cancelled orders to match Shopify admin
+    orders = [o for o in orders if not o.get("cancelled_at")]
     return orders
 
 
