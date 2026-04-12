@@ -97,6 +97,7 @@ def fee_cfg() -> dict:
         "stripe_pct":    float(os.environ.get("STRIPE_FEE_PCT",   "2.9")),
         "stripe_fixed":  float(os.environ.get("STRIPE_FIXED_FEE", "0.30")),
         "cogs_per_unit": float(os.environ.get("COGS_PER_UNIT",    "18")),  # fallback only
+        "shipping_per_order": float(os.environ.get("SHIPPING_PER_ORDER", "8")),
     }
 
 # ─────────────────────────────────────────────────────────────
@@ -150,8 +151,9 @@ def normalize_shopify_order(o: dict, fees: dict) -> dict:
     cogs = cogs_for_line_items("shopify", line_items, fees["cogs_per_unit"])
 
     platform_fee = gross * (fees["shopify_fee"] / 100)
-    stripe_fee   = gross * (fees["stripe_pct"] / 100) + fees["stripe_fixed"]
-    total_fees   = platform_fee + stripe_fee + cogs
+    stripe_fee     = gross * (fees["stripe_pct"] / 100) + fees["stripe_fixed"]
+    shipping_cost  = fees["shipping_per_order"]
+    total_fees     = platform_fee + stripe_fee + cogs + shipping_cost
 
     bill = o.get("billing_address") or {}
     name = f"{bill.get('first_name','')} {bill.get('last_name','')}".strip() or "Customer"
@@ -167,6 +169,7 @@ def normalize_shopify_order(o: dict, fees: dict) -> dict:
         "platform_fee": round(platform_fee, 2),
         "stripe_fee":   round(stripe_fee, 2),
         "cogs":         round(cogs, 2),
+        "shipping":     round(shipping_cost, 2),
         "total_fees":   round(total_fees, 2),
         "net":          round(gross - total_fees, 2),
         "line_items":   [
@@ -314,8 +317,9 @@ def normalize_amazon_order(o: dict, fees: dict, order_items: list = None) -> dic
         cogs        = round(gross * AMAZON_COGS_RATIO, 2)
         items_out   = []
 
-    amazon_fee  = gross * (fees["amazon_fee"] / 100)
-    total_fees  = amazon_fee + cogs
+    amazon_fee     = gross * (fees["amazon_fee"] / 100)
+    shipping_cost  = fees["shipping_per_order"]
+    total_fees     = amazon_fee + cogs + shipping_cost
 
     return {
         "id":           o.get("AmazonOrderId", ""),
@@ -328,6 +332,7 @@ def normalize_amazon_order(o: dict, fees: dict, order_items: list = None) -> dic
         "platform_fee": round(amazon_fee, 2),
         "stripe_fee":   0.0,
         "cogs":         cogs,
+        "shipping":     round(shipping_cost, 2),
         "total_fees":   round(total_fees, 2),
         "net":          round(gross - total_fees, 2),
         "cogs_method":  "per_asin" if order_items else "weighted_ratio",
@@ -468,6 +473,7 @@ def get_summary():
                                     if o["platform"] == "shopify"), 2),
         "stripe_fees":    round(sum(o["stripe_fee"]   for o in orders), 2),
         "cogs":           round(sum(o["cogs"]         for o in orders), 2),
+        "shipping":       round(sum(o.get("shipping", 0) for o in orders), 2),
         "total_fees":     round(sum(o["total_fees"]   for o in orders), 2),
         "net_revenue":    round(sum(o["net"]          for o in orders), 2),
         "total_units":    sum(o["units"] for o in orders),
@@ -615,6 +621,7 @@ def api_config():
             "stripe_pct":   float(os.environ.get("STRIPE_FEE_PCT",    "2.9")),
             "stripe_fixed": float(os.environ.get("STRIPE_FIXED_FEE",  "0.30")),
             "cogs_per_unit":float(os.environ.get("COGS_PER_UNIT",     "18")),
+            "shipping_per_order": float(os.environ.get("SHIPPING_PER_ORDER", "8")),
         }
     })
 
