@@ -1389,6 +1389,7 @@ async function fetchLiveData(proxy) {
       ...amData.orders.map(o => ({
         id:o.id, platform:'amazon', date:new Date(o.created_at),
         gross:o.gross, units:o.units, customer:'Amazon Customer', status:o.status,
+        fulfillment_status:o.fulfillment_status||"unfulfilled",
         _platformFee:o.platform_fee, _stripeFee:0,
         _cogs:o.cogs, _shipping:o.shipping||0, _net:o.net, _cogsMethod:o.cogs_method||'weighted_ratio', _lineItems:o.line_items||[]
       }))
