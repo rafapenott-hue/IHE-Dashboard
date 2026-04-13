@@ -114,7 +114,7 @@ def shopify_fetch(store: str, token: str, created_at_min: str) -> list:
         "created_at_min":  created_at_min,
         "limit":           250,
         # include line_items so we can do per-SKU COGS
-        "fields": "id,order_number,created_at,total_price,financial_status,cancelled_at,"
+        "fields": "id,order_number,created_at,total_price,financial_status,fulfillment_status,cancelled_at,"
                   "billing_address,line_items",
     }
     orders = []
@@ -166,6 +166,7 @@ def normalize_shopify_order(o: dict, fees: dict) -> dict:
         "units":        total_units,
         "customer":     name,
         "status":       o.get("financial_status", ""),
+        "fulfillment_status": o.get("fulfillment_status") or "unfulfilled",
         "platform_fee": round(platform_fee, 2),
         "stripe_fee":   round(stripe_fee, 2),
         "cogs":         round(cogs, 2),
@@ -329,6 +330,7 @@ def normalize_amazon_order(o: dict, fees: dict, order_items: list = None) -> dic
         "units":        total_units,
         "customer":     "Amazon Customer",
         "status":       o.get("OrderStatus", ""),
+        "fulfillment_status": {"Shipped":"fulfilled","PartiallyShipped":"partial"}.get(o.get("OrderStatus",""), "unfulfilled"),
         "platform_fee": round(amazon_fee, 2),
         "stripe_fee":   0.0,
         "cogs":         cogs,
