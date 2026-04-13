@@ -521,7 +521,29 @@ async function init
       border: 1px solid var(--border);
       color: var(--text-3);
     }
-  </style>
+  
+/* === TRACKING TAB === */
+.nav-tabs{display:flex;gap:8px;margin:0 24px}
+.nav-tab{padding:6px 16px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;font-size:.875rem;font-weight:500;transition:all .2s}
+.nav-tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.nav-tab:hover:not(.active){background:var(--card-bg);color:var(--text)}
+.tracking-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
+.track-card{background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:20px;text-align:center}
+.track-card .label{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.track-card .value{font-size:1.75rem;font-weight:700;color:var(--text)}
+.track-card.shipped .value{color:#22c55e}
+.track-card.unshipped .value{color:#f59e0b}
+.track-card.overdue .value{color:#ef4444}
+.track-filters{display:flex;gap:8px;margin-bottom:16px}
+.track-filter{padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;font-size:.8rem}
+.track-filter.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.status-badge{display:inline-block;padding:2px 10px;border-radius:99px;font-size:.75rem;font-weight:600}
+.status-badge.fulfilled{background:rgba(34,197,94,.15);color:#22c55e}
+.status-badge.pending{background:rgba(245,158,11,.15);color:#f59e0b}
+.status-badge.overdue{background:rgba(239,68,68,.15);color:#ef4444}
+#page-tracking{padding:24px 32px}
+@media(max-width:600px){.tracking-cards{grid-template-columns:repeat(2,1fr)}.nav-tabs{margin:0 8px}}
+</style>
 </head>
 <body>
 
@@ -532,6 +554,10 @@ async function init
     <span class="mode-pill demo" id="mode-badge" style="display:none">Demo</span>
     <span class="mode-pill live" id="live-badge" style="display:inline-block">Live</span>
   </div>
+    <div class="nav-tabs">
+    <button class="nav-tab active" onclick="switchPage('dashboard')">Dashboard</button>
+    <button class="nav-tab" onclick="switchPage('tracking')">Tracking</button>
+  </div>
   <div class="header-right">
     <button class="btn" onclick="openModal('settings')">Settings</button>
     <!-- Connect APIs button removed: APIs auto-configured from server -->
@@ -540,6 +566,7 @@ async function init
 
 <main class="main">
 
+<div id="page-dashboard">
   <!-- Demo banner -->
   <div class="demo-banner" id="demo-banner" style="display:none">
     Demo mode — showing simulated data. Click <strong>Connect APIs</strong> to use live Shopify &amp; Amazon data.
@@ -750,6 +777,31 @@ async function init
       </table>
     </div>
   </div>
+
+</div><!-- /page-dashboard -->
+
+<div id="page-tracking" style="display:none">
+  <div class="tracking-cards">
+    <div class="track-card"><div class="label">Total Orders</div><div class="value" id="trk-total">0</div></div>
+    <div class="track-card shipped"><div class="label">Shipped</div><div class="value" id="trk-shipped">0</div></div>
+    <div class="track-card unshipped"><div class="label">Unshipped</div><div class="value" id="trk-unshipped">0</div></div>
+    <div class="track-card overdue"><div class="label">Overdue (&gt;48h)</div><div class="value" id="trk-overdue">0</div></div>
+  </div>
+  <div class="track-filters">
+    <button class="track-filter active" onclick="filterTracking('all')">All</button>
+    <button class="track-filter" onclick="filterTracking('fulfilled')">Shipped</button>
+    <button class="track-filter" onclick="filterTracking('unfulfilled')">Unshipped</button>
+    <button class="track-filter" onclick="filterTracking('overdue')">Overdue</button>
+  </div>
+  <div class="tbl-wrap">
+    <table class="tbl" id="tracking-table">
+      <thead><tr>
+        <th>Date</th><th>Order</th><th>Platform</th><th>Customer</th><th>Gross</th><th>Status</th><th>Days</th>
+      </tr></thead>
+      <tbody id="tracking-body"></tbody>
+    </table>
+  </div>
+</div>
 
 </main>
 
@@ -1386,6 +1438,71 @@ async function init() {
 }
 
 init();
+
+// === TRACKING TAB ===
+let trackingFilter = "all";
+
+function switchPage(page) {
+  document.getElementById("page-dashboard").style.display = page === "dashboard" ? "" : "none";
+  document.getElementById("page-tracking").style.display = page === "tracking" ? "" : "none";
+  document.querySelectorAll(".nav-tab").forEach(function(b, i) {
+    b.classList.toggle("active", (i === 0 && page === "dashboard") || (i === 1 && page === "tracking"));
+  });
+  if (page === "tracking") renderTracking();
+}
+
+function daysSince(dateStr) {
+  var d = new Date(dateStr);
+  var now = new Date();
+  return Math.floor((now - d) / 86400000);
+}
+
+function filterTracking(f) {
+  trackingFilter = f;
+  document.querySelectorAll(".track-filter").forEach(function(b) {
+    var t = b.textContent.toLowerCase();
+    b.classList.toggle("active", (f==="all" && t==="all") || (f==="fulfilled" && t==="shipped") || (f==="unfulfilled" && t==="unshipped") || (f==="overdue" && t==="overdue"));
+  });
+  renderTracking();
+}
+function renderTracking() {
+  var orders = S.orders || [];
+  var total = 0, shipped = 0, unshipped = 0, overdue = 0;
+  var rows = [];
+  orders.forEach(function(o) {
+    var fs = (o.fulfillment_status || "unfulfilled").toLowerCase();
+    var days = daysSince(o.date);
+    var isShipped = fs === "fulfilled";
+    var isOverdue = !isShipped && days > 2;
+    total++;
+    if (isShipped) shipped++;
+    else if (isOverdue) { overdue++; unshipped++; }
+    else unshipped++;
+    var status = isShipped ? "fulfilled" : isOverdue ? "overdue" : "pending";
+    if (trackingFilter === "all" || trackingFilter === status || (trackingFilter === "unfulfilled" && (status === "pending" || status === "overdue"))) {
+      rows.push({o: o, status: status, days: days, isShipped: isShipped});
+    }
+  });
+  document.getElementById("trk-total").textContent = total;
+  document.getElementById("trk-shipped").textContent = shipped;
+  document.getElementById("trk-unshipped").textContent = unshipped;
+  document.getElementById("trk-overdue").textContent = overdue;
+  var body = document.getElementById("tracking-body");
+  body.innerHTML = "";
+  rows.forEach(function(r) {
+    var tr = document.createElement("tr");
+    var badgeClass = r.status;
+    var badgeText = r.isShipped ? "Shipped" : r.status === "overdue" ? "Overdue" : "Pending";
+    tr.innerHTML = "<td>" + r.o.date + "</td>" +
+      "<td>#" + r.o.order_number + "</td>" +
+      "<td>" + r.o.platform + "</td>" +
+      "<td>" + (r.o.customer || "N/A") + "</td>" +
+      "<td>" + fmt(r.o.gross) + "</td>" +
+      "<td><span class=\"status-badge " + badgeClass + "\">" + badgeText + "</span></td>" +
+      "<td>" + r.days + "d</td>";
+    body.appendChild(tr);
+  });
+}
 </script>
 </body>
 </html>
