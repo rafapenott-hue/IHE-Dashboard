@@ -1382,6 +1382,7 @@ async function fetchLiveData(proxy) {
       ...shData.orders.map(o => ({
         id:o.id, platform:'shopify', date:new Date(o.created_at),
         gross:o.gross, units:o.units, customer:o.customer, status:o.status,
+        fulfillment_status:o.fulfillment_status||"unfulfilled",
         _platformFee:o.platform_fee, _stripeFee:o.stripe_fee,
         _cogs:o.cogs, _shipping:o.shipping||0, _net:o.net, _cogsMethod:'per_sku', _lineItems:o.line_items||[]
       })),
@@ -1466,7 +1467,7 @@ function filterTracking(f) {
   renderTracking();
 }
 function renderTracking() {
-  var orders = S.orders || [];
+  var orders = filteredOrders() || [];
   var total = 0, shipped = 0, unshipped = 0, overdue = 0;
   var rows = [];
   orders.forEach(function(o) {
@@ -1493,8 +1494,8 @@ function renderTracking() {
     var tr = document.createElement("tr");
     var badgeClass = r.status;
     var badgeText = r.isShipped ? "Shipped" : r.status === "overdue" ? "Overdue" : "Pending";
-    tr.innerHTML = "<td>" + r.o.date + "</td>" +
-      "<td>#" + r.o.order_number + "</td>" +
+    tr.innerHTML = "<td>" + r.o.date.toISOString().slice(0,10) + "</td>" +
+      "<td>#" + r.o.id + "</td>" +
       "<td>" + r.o.platform + "</td>" +
       "<td>" + (r.o.customer || "N/A") + "</td>" +
       "<td>" + fmt(r.o.gross) + "</td>" +
