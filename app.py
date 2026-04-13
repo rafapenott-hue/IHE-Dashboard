@@ -1,9 +1,9 @@
 """
-Iberian Ham Express — Sales Dashboard API Server v3
+Iberian Ham Express â Sales Dashboard API Server v3
 =====================================================
 Now supports per-SKU COGS:
-  • Shopify orders  → exact COGS via Variant SKU lookup from cogs_data.json
-  • Amazon orders   → exact COGS via ASIN lookup (when order items fetched)
+  â¢ Shopify orders  â exact COGS via Variant SKU lookup from cogs_data.json
+  â¢ Amazon orders   â exact COGS via ASIN lookup (when order items fetched)
                       or weighted-average ratio fallback (62.6% of order total)
 
 LOCAL DEV:
@@ -11,7 +11,7 @@ LOCAL DEV:
     python api_server.py
 
 DEPLOY TO RENDER:
-    Push folder to GitHub → connect in Render dashboard → reads render.yaml.
+    Push folder to GitHub â connect in Render dashboard â reads render.yaml.
     Set secret env vars (SHOPIFY_TOKEN, AMAZON_* etc.) in Render Environment tab.
 
 ENDPOINTS:
@@ -20,9 +20,9 @@ ENDPOINTS:
     GET /api/amazon/orders?start=ISO
     GET /api/amazon/order-items?order_id=XXX-XXXXXXX-XXXXXXX
     GET /api/summary?period=yesterday|today|week|month
-    GET /api/cogs                          → full COGS lookup table (JSON)
-    GET /api/cogs/amazon/<asin>            → single ASIN lookup
-    GET /api/cogs/shopify/<sku>            → single SKU lookup
+    GET /api/cogs                          â full COGS lookup table (JSON)
+    GET /api/cogs/amazon/<asin>            â single ASIN lookup
+    GET /api/cogs/shopify/<sku>            â single SKU lookup
 """
 
 import os
@@ -37,635 +37,496 @@ app  = Flask(__name__)
 CORS(app, origins=["*"])
 PORT = int(os.environ.get("PORT", 5000))
 
-# ─────────────────────────────────────────────────────────────
-# COGS TABLE  (loaded once at startup from cogs_data.json)
-# ─────────────────────────────────────────────────────────────
 
-_COGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cogs_data.json")
-_COGS: dict = {"amazon": {}, "shopify": {}, "meta": {}}
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# CARRIER TRACKING  (FedEx, UPS, USPS)
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
-def _load_cogs():
-    global _COGS
-    try:
-        with open(_COGS_FILE, encoding="utf-8") as f:
-            _COGS = json.load(f)
-        print(f"  ✅ COGS loaded — "
-              f"{len(_COGS.get('amazon', {}))} Amazon ASINs, "
-              f"{len(_COGS.get('shopify', {}))} Shopify SKUs")
-    except FileNotFoundError:
-        print(f"  ⚠️  cogs_data.json not found at {_COGS_FILE} — using fallback COGS")
-
-_load_cogs()
-
-# Amazon weighted COGS ratio (fallback when ASIN not in table or no line items)
-# = sum(Costo) / sum(Amazon price) across all products  → 62.6%
-AMAZON_COGS_RATIO = float(os.environ.get("AMAZON_COGS_RATIO", "0.6255"))
+_TRACK_CACHE = {}          # {tracking_number: {data, ts}}
+_TRACK_CACHE_TTL = 1800    # 30 min cache
+_CARRIER_TOKENS = {}       # {carrier: {token, expires_at}}
 
 
-def cogs_for_line_items(platform: str, line_items: list, fallback_per_unit: float) -> float:
-    """
-    Calculate total COGS for a list of line items.
-    Each item: {"sku": str, "asin": str, "quantity": int}
-    Falls back to fallback_per_unit × quantity when SKU/ASIN not in table.
-    """
-    table  = _COGS.get(platform, {})
-    total  = 0.0
-    for item in line_items:
-        qty  = max(1, int(item.get("quantity", 1)))
-        key  = item.get("asin") if platform == "amazon" else item.get("sku", "")
-        if key and key in table:
-            total += table[key]["cogs"] * qty
-        else:
-            total += fallback_per_unit * qty
-    return round(total, 2)
+def _detect_carrier(tracking_number, carrier_hint=""):
+    """Detect carrier from tracking number pattern or hint string."""
+    hint = (carrier_hint or "").lower()
+    if "fedex" in hint:
+        return "fedex"
+    if "ups" in hint:
+        return "ups"
+    if "usps" in hint or "united states postal" in hint:
+        return "usps"
+    tn = (tracking_number or "").strip()
+    if not tn:
+        return "unknown"
+    if tn.isdigit() and len(tn) in (12, 15, 20, 22):
+        return "fedex"
+    if tn.upper().startswith("1Z") and len(tn) == 18:
+        return "ups"
+    if tn.isdigit() and len(tn) in (20, 22) or (tn.startswith("9") and len(tn) >= 20):
+        return "usps"
+    return "unknown"
 
 
-# ─────────────────────────────────────────────────────────────
-# CONFIG HELPERS
-# ─────────────────────────────────────────────────────────────
-
-def cfg(env_key: str, header_key: str = None, default: str = "") -> str:
-    val = os.environ.get(env_key, "").strip()
-    if not val and header_key:
-        val = request.headers.get(header_key, "").strip()
-    return val or default
-
-def fee_cfg() -> dict:
-    return {
-        "amazon_fee":    float(os.environ.get("AMAZON_FEE_PCT",    "15")),
-        "shopify_fee":   float(os.environ.get("SHOPIFY_FEE_PCT",    "2")),
-        "stripe_pct":    float(os.environ.get("STRIPE_FEE_PCT",   "2.9")),
-        "stripe_fixed":  float(os.environ.get("STRIPE_FIXED_FEE", "0.30")),
-        "cogs_per_unit": float(os.environ.get("COGS_PER_UNIT",    "18")),  # fallback only
-        "shipping_per_order": float(os.environ.get("SHIPPING_PER_ORDER", "8")),
-    }
-
-# ─────────────────────────────────────────────────────────────
-# SHOPIFY
-# ─────────────────────────────────────────────────────────────
-
-def shopify_fetch(store: str, token: str, created_at_min: str) -> list:
-    store  = store.replace("https://", "").replace("http://", "").rstrip("/")
-    url    = f"https://{store}/admin/api/2025-10/orders.json"
-    hdrs   = {"X-Shopify-Access-Token": token}
-    params = {
-        "status":          "any",
-        "financial_status": "paid",
-        "created_at_min":  created_at_min,
-        "limit":           250,
-        # include line_items so we can do per-SKU COGS
-        "fields": "id,order_number,created_at,total_price,financial_status,fulfillment_status,cancelled_at,"
-                  "billing_address,line_items",
-    }
-    orders = []
-    while True:
-        r = requests.get(url, headers=hdrs, params=params, timeout=20)
-        r.raise_for_status()
-        batch = r.json().get("orders", [])
-        orders.extend(batch)
-        link     = r.headers.get("Link", "")
-        next_url = None
-        for part in link.split(","):
-            if 'rel="next"' in part:
-                next_url = part.split(";")[0].strip().strip("<>")
-        if not next_url:
-            break
-        url    = next_url
-        params = {}
-    # Exclude cancelled orders to match Shopify admin
-    orders = [o for o in orders if not o.get("cancelled_at")]
-    return orders
-
-
-def normalize_shopify_order(o: dict, fees: dict) -> dict:
-    """Convert a raw Shopify order dict into our standard format with exact COGS."""
-    gross = float(o.get("total_price", 0))
-
-    # Extract line items for per-SKU COGS
-    raw_items = o.get("line_items", [])
-    line_items = [
-        {"sku": li.get("sku", ""), "quantity": li.get("quantity", 1)}
-        for li in raw_items
-    ]
-    total_units = sum(li["quantity"] for li in line_items)
-    cogs = cogs_for_line_items("shopify", line_items, fees["cogs_per_unit"])
-
-    platform_fee = gross * (fees["shopify_fee"] / 100)
-    stripe_fee     = gross * (fees["stripe_pct"] / 100) + fees["stripe_fixed"]
-    shipping_cost  = fees["shipping_per_order"]
-    total_fees     = platform_fee + stripe_fee + cogs + shipping_cost
-
-    bill = o.get("billing_address") or {}
-    name = f"{bill.get('first_name','')} {bill.get('last_name','')}".strip() or "Customer"
-
-    return {
-        "id":           f"SH-{o.get('order_number', o.get('id', ''))}",
-        "platform":     "shopify",
-        "created_at":   o.get("created_at", ""),
-        "gross":        round(gross, 2),
-        "units":        total_units,
-        "customer":     name,
-        "status":       o.get("financial_status", ""),
-        "fulfillment_status": o.get("fulfillment_status") or "unfulfilled",
-        "platform_fee": round(platform_fee, 2),
-        "stripe_fee":   round(stripe_fee, 2),
-        "cogs":         round(cogs, 2),
-        "shipping":     round(shipping_cost, 2),
-        "total_fees":   round(total_fees, 2),
-        "net":          round(gross - total_fees, 2),
-        "line_items":   [
-            {
-                "sku":        li.get("sku", ""),
-                "title":      li.get("name", li.get("title", "")),
-                "quantity":   li.get("quantity", 1),
-                "unit_price": float(li.get("price", 0)),
-                "cogs":       (_COGS["shopify"].get(li.get("sku",""), {}).get("cogs", fees["cogs_per_unit"]))
-                               * li.get("quantity", 1),
-            }
-            for li in raw_items
-        ],
-    }
-
-
-@app.route("/api/shopify/orders")
-def get_shopify_orders():
-    store = cfg("SHOPIFY_STORE", "X-Shopify-Store")
-    token = cfg("SHOPIFY_TOKEN", "X-Shopify-Token")
-    start = request.args.get("start",
-            (datetime.datetime.utcnow() - datetime.timedelta(days=30)).isoformat() + "Z")
-    if not store or not token:
-        return jsonify({"error": "Missing Shopify credentials"}), 400
-    try:
-        raw    = shopify_fetch(store, token, start)
-        fees   = fee_cfg()
-        orders = [normalize_shopify_order(o, fees) for o in raw]
-        return jsonify({"orders": orders, "count": len(orders)})
-    except requests.HTTPError as e:
-        return jsonify({"error": str(e), "status": e.response.status_code}), 502
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-# ─────────────────────────────────────────────────────────────
-# AMAZON SP-API
-# ─────────────────────────────────────────────────────────────
-
-AMAZON_LWA_URL   = "https://api.amazon.com/auth/o2/token"
-AMAZON_ENDPOINTS = {
-    "us-east-1": "https://sellingpartnerapi-na.amazon.com",
-    "eu-west-1": "https://sellingpartnerapi-eu.amazon.com",
-    "us-west-2": "https://sellingpartnerapi-fe.amazon.com",
-}
-_lwa_cache: dict = {}
-
-
-def get_lwa_token(client_id: str, client_secret: str, refresh_token: str) -> str:
-    now    = time.time()
-    cached = _lwa_cache.get(client_id)
-    if cached and cached["expires"] > now + 60:
+def _fedex_token():
+    """Get FedEx OAuth token (cached until expiry)."""
+    cached = _CARRIER_TOKENS.get("fedex")
+    if cached and cached["expires_at"] > time.time():
         return cached["token"]
-    r = requests.post(AMAZON_LWA_URL, data={
-        "grant_type": "refresh_token", "refresh_token": refresh_token,
-        "client_id": client_id, "client_secret": client_secret,
-    }, timeout=15)
-    r.raise_for_status()
-    data  = r.json()
-    token = data["access_token"]
-    _lwa_cache[client_id] = {"token": token, "expires": now + data.get("expires_in", 3600)}
-    return token
-
-
-def _amazon_headers(access_token: str) -> dict:
-    return {
-        "x-amz-access-token": access_token,
-        "x-amz-date": datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ"),
-        "User-Agent": "IberianHamExpressDashboard/3.0 (Language=Python)",
-    }
-
-
-def amazon_fetch_orders(client_id, client_secret, refresh_token,
-                        marketplace, region, created_after) -> list:
-    endpoint = AMAZON_ENDPOINTS.get(region, AMAZON_ENDPOINTS["us-east-1"])
-    token    = get_lwa_token(client_id, client_secret, refresh_token)
-    orders, next_token = [], None
-    while True:
-        params = {"NextToken": next_token} if next_token else {
-            "MarketplaceIds": marketplace, "CreatedAfter": created_after,
-            "OrderStatuses": "Shipped,Unshipped,PartiallyShipped,Pending",
-            "MaxResultsPerPage": 100,
-        }
-        r = requests.get(f"{endpoint}/orders/v0/orders",
-                         headers=_amazon_headers(token), params=params, timeout=20)
-        if r.status_code == 429:
-            time.sleep(2)
-            continue
-        r.raise_for_status()
-        payload    = r.json().get("payload", {})
-        orders.extend(payload.get("Orders", []))
-        next_token = payload.get("NextToken")
-        if not next_token:
-            break
-    return orders
-
-
-def amazon_fetch_order_items(order_id: str, client_id: str, client_secret: str,
-                             refresh_token: str, region: str) -> list:
-    """Fetch line items for a single Amazon order (ASIN-level detail)."""
-    endpoint = AMAZON_ENDPOINTS.get(region, AMAZON_ENDPOINTS["us-east-1"])
-    token    = get_lwa_token(client_id, client_secret, refresh_token)
-    items, next_token = [], None
-    while True:
-        params = {"NextToken": next_token} if next_token else {}
-        r = requests.get(f"{endpoint}/orders/v0/orders/{order_id}/orderItems",
-                         headers=_amazon_headers(token), params=params, timeout=20)
-        if r.status_code == 429:
-            time.sleep(2)
-            continue
-        r.raise_for_status()
-        payload    = r.json().get("payload", {})
-        items.extend(payload.get("OrderItems", []))
-        next_token = payload.get("NextToken")
-        if not next_token:
-            break
-    return items
-
-
-def normalize_amazon_order(o: dict, fees: dict, order_items: list = None) -> dict:
-    """Convert raw Amazon order to standard format. Uses ASIN COGS if order_items provided."""
-    gross = float((o.get("OrderTotal") or {}).get("Amount", 0))
-
-    if order_items:
-        line_items = [
-            {"asin": i.get("ASIN", ""), "quantity": int(i.get("QuantityOrdered", 1))}
-            for i in order_items
-        ]
-        total_units = sum(li["quantity"] for li in line_items)
-        cogs = cogs_for_line_items("amazon", line_items, fees["cogs_per_unit"])
-        items_out = [
-            {
-                "asin":       i.get("ASIN", ""),
-                "title":      i.get("Title", "")[:80],
-                "quantity":   int(i.get("QuantityOrdered", 1)),
-                "unit_price": float((i.get("ItemPrice") or {}).get("Amount", 0)),
-                "cogs":       (_COGS["amazon"].get(i.get("ASIN",""), {}).get("cogs", fees["cogs_per_unit"]))
-                               * int(i.get("QuantityOrdered", 1)),
-            }
-            for i in order_items
-        ]
-    else:
-        # Fallback: weighted-average ratio from COGS table (62.6%)
-        total_units = int(o.get("NumberOfItemsShipped") or o.get("NumberOfItemsUnshipped") or 1)
-        cogs        = round(gross * AMAZON_COGS_RATIO, 2)
-        items_out   = []
-
-    amazon_fee     = gross * (fees["amazon_fee"] / 100)
-    shipping_cost  = fees["shipping_per_order"]
-    total_fees     = amazon_fee + cogs + shipping_cost
-
-    return {
-        "id":           o.get("AmazonOrderId", ""),
-        "platform":     "amazon",
-        "created_at":   o.get("PurchaseDate", ""),
-        "gross":        round(gross, 2),
-        "units":        total_units,
-        "customer":     "Amazon Customer",
-        "status":       o.get("OrderStatus", ""),
-        "fulfillment_status": {"Shipped":"fulfilled","PartiallyShipped":"partial"}.get(o.get("OrderStatus",""), "unfulfilled"),
-        "platform_fee": round(amazon_fee, 2),
-        "stripe_fee":   0.0,
-        "cogs":         cogs,
-        "shipping":     round(shipping_cost, 2),
-        "total_fees":   round(total_fees, 2),
-        "net":          round(gross - total_fees, 2),
-        "cogs_method":  "per_asin" if order_items else "weighted_ratio",
-        "line_items":   items_out,
-    }
-
-
-@app.route("/api/amazon/orders")
-def get_amazon_orders():
-    client_id     = cfg("AMAZON_CLIENT_ID",     "X-Amazon-Client-Id")
-    client_secret = cfg("AMAZON_CLIENT_SECRET",  "X-Amazon-Client-Secret")
-    refresh_token = cfg("AMAZON_REFRESH_TOKEN",  "X-Amazon-Refresh-Token")
-    marketplace   = cfg("AMAZON_MARKETPLACE_ID", "X-Amazon-Marketplace", "ATVPDKIKX0DER")
-    region        = cfg("AMAZON_REGION",         "X-Amazon-Region",      "us-east-1")
-    start         = request.args.get("start",
-                    (datetime.datetime.utcnow() - datetime.timedelta(days=30)).isoformat() + "Z")
-    if not client_id or not client_secret or not refresh_token:
-        return jsonify({"error": "Missing Amazon credentials"}), 400
+    cid = os.environ.get("FEDEX_CLIENT_ID", "")
+    csec = os.environ.get("FEDEX_CLIENT_SECRET", "")
+    if not cid or not csec:
+        return None
     try:
-        fees   = fee_cfg()
-        raw    = amazon_fetch_orders(client_id, client_secret, refresh_token,
-                                     marketplace, region, start)
-        orders = [normalize_amazon_order(o, fees) for o in raw]
-        return jsonify({"orders": orders, "count": len(orders),
-                        "cogs_method": "weighted_ratio",
-                        "note": "Call /api/amazon/order-items for exact per-ASIN COGS"})
-    except requests.HTTPError as e:
-        return jsonify({"error": str(e), "status": e.response.status_code}), 502
+        r = requests.post("https://apis.fedex.com/oauth/token",
+            data={"grant_type": "client_credentials", "client_id": cid, "client_secret": csec},
+            headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=10)
+        r.raise_for_status()
+        d = r.json()
+        _CARRIER_TOKENS["fedex"] = {"token": d["access_token"],
+            "expires_at": time.time() + d.get("expires_in", 3600) - 60}
+        return d["access_token"]
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"[FEDEX] OAuth error: {e}")
+        return None
 
 
-@app.route("/api/amazon/order-items")
-def get_amazon_order_items():
-    """
-    Fetch exact line items (with ASINs) for one Amazon order.
-    Returns per-ASIN COGS from cogs_data.json.
-    Query: ?order_id=XXX-XXXXXXX-XXXXXXX
-    """
-    order_id      = request.args.get("order_id", "")
-    client_id     = cfg("AMAZON_CLIENT_ID",     "X-Amazon-Client-Id")
-    client_secret = cfg("AMAZON_CLIENT_SECRET",  "X-Amazon-Client-Secret")
-    refresh_token = cfg("AMAZON_REFRESH_TOKEN",  "X-Amazon-Refresh-Token")
-    region        = cfg("AMAZON_REGION",         "X-Amazon-Region", "us-east-1")
-    if not order_id:
-        return jsonify({"error": "order_id query param required"}), 400
+def _ups_token():
+    """Get UPS OAuth token (cached until expiry)."""
+    cached = _CARRIER_TOKENS.get("ups")
+    if cached and cached["expires_at"] > time.time():
+        return cached["token"]
+    cid = os.environ.get("UPS_CLIENT_ID", "")
+    csec = os.environ.get("UPS_CLIENT_SECRET", "")
+    if not cid or not csec:
+        return None
     try:
-        fees  = fee_cfg()
-        items = amazon_fetch_order_items(order_id, client_id, client_secret, refresh_token, region)
-        enriched = []
-        for i in items:
-            asin     = i.get("ASIN", "")
-            qty      = int(i.get("QuantityOrdered", 1))
-            cogs_rec = _COGS["amazon"].get(asin, {})
-            enriched.append({
-                "asin":         asin,
-                "seller_sku":   i.get("SellerSKU", ""),
-                "title":        i.get("Title", "")[:100],
-                "quantity":     qty,
-                "unit_price":   float((i.get("ItemPrice") or {}).get("Amount", 0)),
-                "cogs_per_unit": cogs_rec.get("cogs", fees["cogs_per_unit"]),
-                "cogs_total":   round(cogs_rec.get("cogs", fees["cogs_per_unit"]) * qty, 2),
-                "in_cogs_table": bool(cogs_rec),
+        r = requests.post("https://onlinetools.ups.com/security/v1/oauth/token",
+            data={"grant_type": "client_credentials"}, auth=(cid, csec),
+            headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=10)
+        r.raise_for_status()
+        d = r.json()
+        _CARRIER_TOKENS["ups"] = {"token": d["access_token"],
+            "expires_at": time.time() + d.get("expires_in", 14400) - 60}
+        return d["access_token"]
+    except Exception as e:
+        print(f"[UPS] OAuth error: {e}")
+        return None
+
+
+def _usps_token():
+    """Get USPS OAuth token (cached until expiry)."""
+    cached = _CARRIER_TOKENS.get("usps")
+    if cached and cached["expires_at"] > time.time():
+        return cached["token"]
+    cid = os.environ.get("USPS_CLIENT_ID", "")
+    csec = os.environ.get("USPS_CLIENT_SECRET", "")
+    if not cid or not csec:
+        return None
+    try:
+        r = requests.post("https://api.usps.com/oauth2/v3/token",
+            json={"grant_type": "client_credentials", "client_id": cid, "client_secret": csec},
+            headers={"Content-Type": "application/json"}, timeout=10)
+        r.raise_for_status()
+        d = r.json()
+        _CARRIER_TOKENS["usps"] = {"token": d["access_token"],
+            "expires_at": time.time() + d.get("expires_in", 3600) - 60}
+        return d["access_token"]
+    except Exception as e:
+        print(f"[USPS] OAuth error: {e}")
+        return None
+
+
+def _norm_status(carrier, raw_status, code=""):
+    """Map carrier-specific status to unified enum."""
+    s = (raw_status or "").lower()
+    c = (code or "").upper()
+    if carrier == "fedex":
+        if c in ("PU", "OC"): return "picked_up"
+        if c in ("IT", "IX", "AF"): return "in_transit"
+        if c == "OD": return "out_for_delivery"
+        if c == "DL": return "delivered"
+        if c in ("DE", "CA", "SE", "DY"): return "exception"
+        if "deliver" in s: return "delivered"
+        if "transit" in s: return "in_transit"
+        return "label_created"
+    elif carrier == "ups":
+        if "delivered" in s: return "delivered"
+        if "out for delivery" in s: return "out_for_delivery"
+        if any(w in s for w in ("in transit", "departed", "arrived")): return "in_transit"
+        if "picked up" in s or "origin scan" in s: return "picked_up"
+        if "exception" in s or "delay" in s: return "exception"
+        return "label_created"
+    elif carrier == "usps":
+        if "delivered" in s: return "delivered"
+        if "out for delivery" in s: return "out_for_delivery"
+        if any(w in s for w in ("in transit", "arrived", "departed", "processed")): return "in_transit"
+        if "accepted" in s or "picked up" in s: return "picked_up"
+        if "alert" in s or "exception" in s or "delay" in s: return "exception"
+        return "label_created"
+    return "unknown"
+
+
+def _track_fedex(tn):
+    """Query FedEx Track API v1."""
+    token = _fedex_token()
+    if not token:
+        return {"carrier": "fedex", "tracking_number": tn, "status": "no_credentials", "events": []}
+    try:
+        r = requests.post("https://apis.fedex.com/track/v1/trackingnumbers",
+            json={"trackingInfo": [{"trackingNumberInfo": {"trackingNumber": tn}}],
+                  "includeDetailedScans": True},
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json",
+                     "X-locale": "en_US"}, timeout=15)
+        r.raise_for_status()
+        d = r.json()
+        track = d.get("output", {}).get("completeTrackResults", [{}])[0].get("trackResults", [{}])[0]
+        latest = track.get("latestStatusDetail", {})
+        events = []
+        for e in track.get("scanEvents", []):
+            loc = e.get("scanLocation", {})
+            events.append({
+                "timestamp": e.get("date", ""),
+                "status": _norm_status("fedex", e.get("eventDescription", ""), e.get("eventType", "")),
+                "description": e.get("eventDescription", ""),
+                "location": f"{loc.get('city','')}, {loc.get('stateOrProvinceCode','')}".strip(", "),
             })
-        return jsonify({"order_id": order_id, "items": enriched, "count": len(enriched)})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-# ─────────────────────────────────────────────────────────────
-# SUMMARY  (used by daily Telegram report)
-# ─────────────────────────────────────────────────────────────
-
-@app.route("/api/summary")
-def get_summary():
-    period = request.args.get("period", "yesterday")
-    et     = datetime.timezone(datetime.timedelta(hours=-4))
-    now_et = datetime.datetime.now(et)
-
-    if period == "yesterday":
-        day   = now_et - datetime.timedelta(days=1)
-        start = datetime.datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=et)
-        end   = datetime.datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=et)
-    elif period == "today":
-        start = now_et.replace(hour=0, minute=0, second=0)
-        end   = now_et
-    elif period == "week":
-        start = (now_et - datetime.timedelta(days=now_et.weekday())).replace(hour=0, minute=0, second=0)
-        end   = now_et
-    else:  # month
-        start = now_et.replace(day=1, hour=0, minute=0, second=0)
-        end   = now_et
-
-    start_iso = start.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
-    fees      = fee_cfg()
-    errors    = []
-    orders    = []
-
-    store = cfg("SHOPIFY_STORE", "X-Shopify-Store")
-    token = cfg("SHOPIFY_TOKEN", "X-Shopify-Token")
-    if store and token:
-        try:
-            for o in shopify_fetch(store, token, start_iso):
-                dt = datetime.datetime.fromisoformat(
-                    o["created_at"].replace("Z", "+00:00")).astimezone(et)
-                if start <= dt <= end:
-                    orders.append(normalize_shopify_order(o, fees))
-        except Exception as e:
-            errors.append(f"Shopify: {e}")
-
-    client_id     = cfg("AMAZON_CLIENT_ID",    "X-Amazon-Client-Id")
-    client_secret = cfg("AMAZON_CLIENT_SECRET","X-Amazon-Client-Secret")
-    refresh_token = cfg("AMAZON_REFRESH_TOKEN","X-Amazon-Refresh-Token")
-    marketplace   = cfg("AMAZON_MARKETPLACE_ID","X-Amazon-Marketplace","ATVPDKIKX0DER")
-    region        = cfg("AMAZON_REGION","X-Amazon-Region","us-east-1")
-    if client_id and client_secret and refresh_token:
-        try:
-            for o in amazon_fetch_orders(client_id, client_secret, refresh_token,
-                                          marketplace, region, start_iso):
-                raw_dt = o.get("PurchaseDate", "")
-                if not raw_dt:
-                    continue
-                dt = datetime.datetime.fromisoformat(
-                    raw_dt.replace("Z", "+00:00")).astimezone(et)
-                if start <= dt <= end:
-                    orders.append(normalize_amazon_order(o, fees))
-        except Exception as e:
-            errors.append(f"Amazon: {e}")
-
-    totals = {
-        "total_orders":   len(orders),
-        "shopify_orders": sum(1 for o in orders if o["platform"] == "shopify"),
-        "amazon_orders":  sum(1 for o in orders if o["platform"] == "amazon"),
-        "gross_revenue":  round(sum(o["gross"]        for o in orders), 2),
-        "amazon_fees":    round(sum(o["platform_fee"] for o in orders
-                                    if o["platform"] == "amazon"), 2),
-        "shopify_fees":   round(sum(o["platform_fee"] for o in orders
-                                    if o["platform"] == "shopify"), 2),
-        "stripe_fees":    round(sum(o["stripe_fee"]   for o in orders), 2),
-        "cogs":           round(sum(o["cogs"]         for o in orders), 2),
-        "shipping":       round(sum(o.get("shipping", 0) for o in orders), 2),
-        "total_fees":     round(sum(o["total_fees"]   for o in orders), 2),
-        "net_revenue":    round(sum(o["net"]          for o in orders), 2),
-        "total_units":    sum(o["units"] for o in orders),
-        "period":         period,
-        "period_start":   start.isoformat(),
-        "period_end":     end.isoformat(),
-        "errors":         errors,
-    }
-    g = totals["gross_revenue"]
-    totals["net_margin"]  = round(totals["net_revenue"] / g * 100, 1) if g else 0
-    totals["avg_order"]   = round(g / totals["total_orders"], 2) if totals["total_orders"] else 0
-    totals["vendor_owed"] = totals["cogs"]
-    totals["cogs_source"] = "per_sku" if _COGS["shopify"] else "flat_rate"
-    return jsonify(totals)
-
-
-# ─────────────────────────────────────────────────────────────
-# COGS ENDPOINTS
-# ─────────────────────────────────────────────────────────────
-
-@app.route("/api/cogs")
-def get_cogs_table():
-    return jsonify({
-        "meta":    _COGS.get("meta", {}),
-        "amazon":  _COGS.get("amazon", {}),
-        "shopify": _COGS.get("shopify", {}),
-    })
-
-@app.route("/api/cogs/amazon/<asin>")
-def get_amazon_cogs(asin):
-    rec = _COGS["amazon"].get(asin)
-    if not rec:
-        return jsonify({"error": f"ASIN {asin} not in COGS table",
-                        "fallback_ratio": AMAZON_COGS_RATIO}), 404
-    return jsonify({"asin": asin, **rec})
-
-@app.route("/api/cogs/shopify/<sku>")
-def get_shopify_cogs(sku):
-    rec = _COGS["shopify"].get(sku)
-    if not rec:
-        return jsonify({"error": f"SKU {sku} not in COGS table",
-                        "fallback_per_unit": fee_cfg()["cogs_per_unit"]}), 404
-    return jsonify({"sku": sku, **rec})
-
-
-# ─────────────────────────────────────────────────────────────
-# PASSWORD PROTECTION
-# ─────────────────────────────────────────────────────────────
-
-DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
-
-def _check_auth(req):
-    """Return True if request carries a valid session token."""
-    if not DASHBOARD_PASSWORD:
-        return True   # no password set → open access
-    token = req.cookies.get("ihe_token", "")
-    return token == DASHBOARD_PASSWORD
-
-def _login_page(error=False):
-    err_html = '<p style="color:#f43f5e;margin-top:12px;font-size:13px">Incorrect password</p>' if error else ''
-    return f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Iberian Ham Express</title>
-<style>
-  *{{box-sizing:border-box;margin:0;padding:0}}
-  body{{background:#09090b;color:#fafafa;font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
-       display:flex;align-items:center;justify-content:center;min-height:100vh}}
-  .box{{background:#18181b;border:1px solid #27272a;border-radius:12px;padding:40px;width:340px;text-align:center}}
-  .logo{{font-size:18px;font-weight:700;letter-spacing:-.3px;margin-bottom:6px}}
-  .logo span{{color:#6366f1}}
-  .sub{{font-size:12px;color:#52525b;margin-bottom:28px}}
-  input{{width:100%;padding:10px 12px;background:#111113;border:1px solid #27272a;border-radius:6px;
-         color:#fafafa;font-size:14px;outline:none;transition:border .15s}}
-  input:focus{{border-color:#6366f1}}
-  button{{margin-top:12px;width:100%;padding:10px;background:#6366f1;border:none;border-radius:6px;
-          color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:background .15s}}
-  button:hover{{background:#818cf8}}
-</style></head>
-<body><div class="box">
-  <div class="logo">Iberian Ham Express<span>.</span></div>
-  <div class="sub">Sales Dashboard</div>
-  <form method="POST" action="/login">
-    <input type="password" name="password" placeholder="Enter password" autofocus />
-    <button type="submit">Sign in</button>
-    {err_html}
-  </form>
-</div></body></html>"""
-
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    from flask import make_response, redirect
-    if request.method == "POST":
-        pwd = request.form.get("password", "")
-        if pwd == DASHBOARD_PASSWORD:
-            resp = make_response(redirect("/"))
-            resp.set_cookie("ihe_token", pwd, max_age=60*60*24*30, httponly=True, samesite="Lax")
-            return resp
-        return _login_page(error=True), 401
-    return _login_page()
-
-@app.route("/logout")
-def logout():
-    from flask import make_response, redirect
-    resp = make_response(redirect("/login"))
-    resp.delete_cookie("ihe_token")
-    return resp
-
-
-# ─────────────────────────────────────────────────────────────
-# DASHBOARD  (serves dashboard.html at the root URL)
-# ─────────────────────────────────────────────────────────────
-
-@app.route("/")
-def dashboard():
-    from flask import redirect
-    if DASHBOARD_PASSWORD and not _check_auth(request):
-        return redirect("/login")
-    html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html")
-    if os.path.exists(html_path):
-        with open(html_path, encoding="utf-8") as f:
-            content = f.read()
-        return content, 200, {"Content-Type": "text/html; charset=utf-8"}
-    return "<h2>dashboard.html not found — add it to the repo root.</h2>", 404
-
-
-# ─────────────────────────────────────────────────────────────
-# CONFIG  (tells dashboard which credentials are pre-loaded)
-# ─────────────────────────────────────────────────────────────
-
-@app.route("/api/config")
-def api_config():
-    from flask import redirect
-    if DASHBOARD_PASSWORD and not _check_auth(request):
-        return redirect("/login")
-    return jsonify({
-        "shopify_configured":  bool(os.environ.get("SHOPIFY_STORE") and os.environ.get("SHOPIFY_TOKEN")),
-        "amazon_configured":   bool(os.environ.get("AMAZON_CLIENT_ID") and os.environ.get("AMAZON_REFRESH_TOKEN")),
-        "shopify_store":       os.environ.get("SHOPIFY_STORE", ""),
-        "amazon_marketplace":  os.environ.get("AMAZON_MARKETPLACE_ID", "ATVPDKIKX0DER"),
-        "amazon_region":       os.environ.get("AMAZON_REGION", "us-east-1"),
-        "fees": {
-            "amazon_fee":   float(os.environ.get("AMAZON_FEE_PCT",    "15")),
-            "shopify_fee":  float(os.environ.get("SHOPIFY_FEE_PCT",   "2")),
-            "stripe_pct":   float(os.environ.get("STRIPE_FEE_PCT",    "2.9")),
-            "stripe_fixed": float(os.environ.get("STRIPE_FIXED_FEE",  "0.30")),
-            "cogs_per_unit":float(os.environ.get("COGS_PER_UNIT",     "18")),
-            "shipping_per_order": float(os.environ.get("SHIPPING_PER_ORDER", "8")),
+        eta_w = track.get("estimatedDeliveryTimeWindow", {}).get("window", {})
+        return {
+            "carrier": "fedex", "tracking_number": tn,
+            "status": _norm_status("fedex", latest.get("description",""), latest.get("code","")),
+            "status_description": latest.get("description", ""),
+            "location": f"{latest.get('scanLocation',{}).get('city','')}, {latest.get('scanLocation',{}).get('stateOrProvinceCode','')}".strip(", "),
+            "eta": eta_w.get("ends", "") if eta_w else "",
+            "events": events[:20],
         }
-    })
+    except Exception as e:
+        print(f"[FEDEX] Track error: {e}")
+        return {"carrier": "fedex", "tracking_number": tn, "status": "error", "events": [], "error": str(e)}
 
 
-# ─────────────────────────────────────────────────────────────
-# HEALTH
-# ─────────────────────────────────────────────────────────────
+def _track_ups(tn):
+    """Query UPS Track API v1."""
+    token = _ups_token()
+    if not token:
+        return {"carrier": "ups", "tracking_number": tn, "status": "no_credentials", "events": []}
+    try:
+        r = requests.get(f"https://onlinetools.ups.com/api/track/v1/details/{tn}",
+            headers={"Authorization": f"Bearer {token}",
+                     "transId": f"ihe-{int(time.time())}", "transactionSrc": "IHE-Dashboard"},
+            timeout=15)
+        r.raise_for_status()
+        d = r.json()
+        pkg = d.get("trackResponse", {}).get("shipment", [{}])[0].get("package", [{}])[0]
+        acts = pkg.get("activity", [])
+        latest = acts[0] if acts else {}
+        latest_desc = latest.get("status", {}).get("description", "")
+        events = []
+        for a in acts:
+            loc = a.get("location", {}).get("address", {})
+            events.append({
+                "timestamp": f"{a.get('date', '')} {a.get('time', '')}".strip(),
+                "status": _norm_status("ups", a.get("status", {}).get("description", "")),
+                "description": a.get("status", {}).get("description", ""),
+                "location": f"{loc.get('city','')}, {loc.get('stateOrProvinceCode','')}".strip(", "),
+            })
+        eta = pkg.get("deliveryDate", [{}])[0].get("date", "") if pkg.get("deliveryDate") else ""
+        return {
+            "carrier": "ups", "tracking_number": tn,
+            "status": _norm_status("ups", latest_desc),
+            "status_description": latest_desc,
+            "location": events[0]["location"] if events else "",
+            "eta": eta, "events": events[:20],
+        }
+    except Exception as e:
+        print(f"[UPS] Track error: {e}")
+        return {"carrier": "ups", "tracking_number": tn, "status": "error", "events": [], "error": str(e)}
 
-def require_auth():
-    """Call at the top of any API route that needs protection."""
-    from flask import redirect
-    if DASHBOARD_PASSWORD and not _check_auth(request):
-        return jsonify({"error": "unauthorized"}), 401
-    return None
 
-@app.route("/api/health")
-def health():
-    return jsonify({
-        "status":              "ok",
-        "service":             "Iberian Ham Express Dashboard API",
-        "version":             "3.0",
-        "shopify_configured":  bool(os.environ.get("SHOPIFY_STORE")),
-        "amazon_configured":   bool(os.environ.get("AMAZON_CLIENT_ID")),
-        "telegram_configured": bool(os.environ.get("TELEGRAM_BOT_TOKEN")),
-        "cogs_amazon_skus":    len(_COGS.get("amazon", {})),
-        "cogs_shopify_skus":   len(_COGS.get("shopify", {})),
-        "amazon_cogs_ratio":   AMAZON_COGS_RATIO,
-    })
+def _track_usps(tn):
+    """Query USPS Track API v3."""
+    token = _usps_token()
+    if not token:
+        return {"carrier": "usps", "tracking_number": tn, "status": "no_credentials", "events": []}
+    try:
+        r = requests.get(f"https://api.usps.com/tracking/v3/tracking/{tn}",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"expand": "DETAIL"}, timeout=15)
+        r.raise_for_status()
+        d = r.json()
+        events = []
+        for ev in d.get("trackingEvents", []):
+            events.append({
+                "timestamp": ev.get("eventTimestamp", ""),
+                "status": _norm_status("usps", ev.get("eventType", "")),
+                "description": ev.get("eventType", ""),
+                "location": f"{ev.get('eventCity','')}, {ev.get('eventState','')} {ev.get('eventZIPCode','')}".strip(", "),
+            })
+        latest_desc = events[0]["description"] if events else d.get("statusCategory", "")
+        return {
+            "carrier": "usps", "tracking_number": tn,
+            "status": _norm_status("usps", latest_desc),
+            "status_description": latest_desc,
+            "location": events[0]["location"] if events else "",
+            "eta": d.get("expectedDeliveryDate", ""), "events": events[:20],
+        }
+    except Exception as e:
+        print(f"[USPS] Track error: {e}")
+        return {"carrier": "usps", "tracking_number": tn, "status": "error", "events": [], "error": str(e)}
 
 
-# ─────────────────────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────────────────────
+def track_package(tracking_umual,carrier_hint=""):
+    """Track a package. Uses 30-min cache. Returns dict with status + events."""
+    cached = _TRACMCACHE.get(tracking_umual)
+    if cached and (time.time() - cached["ts"]) < _TRACK_CACHE_TTL:
+        return cached["data"]
+    carrier = _detect_carrier(tracking_number, carrier_hint)
+    if carrier == "fedex":
+        result = _track_fedex(tracking_umual)
+    elif carrier == "ups":
+        result = _track_ups(tracking_number)
+    elif carrier == "usps":
+        result = _track_usps(tracking_umual)
+    else:
+        result = {"carrier": "unknown", "tracking_number": tracking_number,
+                    "status": "unknown_carrier", "events": []}
+    _TRACK_CACHE[tracking_umual] = {"data": result, "ts": time.time()}
+    return result
 
-if __name__ == "__main__":
-    print("=" * 60)
-    print("  Iberian Ham Express — Dashboard API Server v3")
-    print("=" * 60)
-    mode = "PRODUCTION" if os.environ.get("SHOPIFY_STORE") else "LOCAL DEV"
-    print(f"\n  Mode    : {mode}")
-    print(f"  URL     : http://localhost:{PORT}")
-    print(f"  Health  : http://localhost:{PORT}/api/health")
-    print(f"  COGS    : http://localhost:{PORT}/api/cogs")
-    print(f"  Summary : http://localhost:{PORT}/api/summary?period=yesterday\n")
-    app.run(host="0.0.0.0", port=PORT, debug=(mode == "LOCAL DEV"))
+
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# COGS TABLE  (loaded once at startup from cogs_data.json)
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ()}
+=M}%1ô½Ì¹ÁÑ ¹©½¥¸¡½Ì¹ÁÑ ¹¥É¹µ¡½Ì¹ÁÑ ¹ÍÁÑ ¡}}¥±}|¤¤°½Í}Ñ¹©Í½¸¤)}
+=Lè¥Ðôìµé½¸èíô°Í¡½Á¥äèíô°µÑèíõô()}±½}½Ì ¤è(±½°}
+=L(ÑÉäè(Ý¥Ñ ½Á¸¡}
+=M}%1°¹½¥¹ôÕÑ´à¤Ìè(}
+=Lô©Í½¸¹±½¡¤(ÁÉ¥¹Ð¡r
+=L±½P(í±¸¡}
+=L¹Ð µé½¸°íô¤¥ôµé½¸M%9Ì°(í±¸¡}
+=L¹Ð Í¡½Á¥ä°íô¤¥ôM¡½Á¥äM-UÌ¤(áÁÐ¥±9½Ñ½Õ¹ÉÉ½Èè(ÁÉ¥¹Ð¡jnOnH½Í}Ñ¹©Í½¸¹½Ð½Õ¹Ðí}
+=M}%1ôPÕÍ¥¹±±¬
+=L¤()}±½}½Ì ¤((µé½¸Ý¥¡Ñ
+=LÉÑ¥¼¡±±¬Ý¡¸M%8¹½Ð¥¸Ñ±½È¹¼±¥¹¥ÑµÌ¤(ôÍÕ´¡
+½ÍÑ¼¤¼ÍÕ´¡µé½¸ÁÉ¥¤É½ÍÌ±°ÁÉ½ÕÑÌHØÈ¸Ø)5i=9}
+=M}IQ%<ô±½Ð¡½Ì¹¹Ù¥É½¸¹Ð 59=9}
+=M}IQ%<°À¸ØÈÔÔ¤¤(()½Í}½É}±¥¹}¥ÑµÌ¡Á±Ñ½É´èÍÑÈ°±¥¹}¥ÑµÌè±¥ÍÐ°±±­}ÁÉ}Õ¹¥Ðè±½Ð¤´ø±½Ðè((
+±Õ±ÑÑ½Ñ°
+=L½È±¥ÍÐ½±¥¹¥ÑµÌ¸( ¥Ñ´èìÍ­ÔèÍÑÈ°Í¥¸èÍÑÈ°ÅÕ¹Ñ¥Ñäè¥¹Ñô(±±Ì¬Ñ¼±±­}ÁÉ}Õ¹¥Ð^ÔÅÕ¹Ñ¥ÑäÝ¡¸M-T½M%8¹½Ð¥¸Ñ±¸((Ñ±ô}
+=L¹Ð¡Á±Ñ½É´°íô¤(Ñ½Ñ°ôÀ¸À(½È¥Ñ´¥¸±¥¹}¥ÑµÌè(ÅÑäôµà Ä°¥¹Ð¡¥Ñ´¹Ð ÅÕ¹Ñ¥Ñä°Ä¤¤¤(­äô¥Ñ´¹Ð M%8¤¥Á±Ñ½É´ôôµé½¸±Í¥Ñ´¹Ð Í­Ô°¤(¥­ä¹­ä¥¸Ñ±è(Ñ½Ñ°¬ôÑ±m­åul½Ìt¨ÅÑä(±Íè(Ñ½Ñ°¬ô±±­}ÁÉ}Õ¹¥Ð¨ÅÑä(ÉÑÕÉ¸É½Õ¹¡Ñ½Ñ°°È¤(((RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR (
+=9%!1AIL(RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR ()¡¹Ù}­äèÍÑÈ°¡É}­äèÍÑÈô9½¹°Õ±ÐèÍÑÈô¤´øÍÑÈè(Ù°ô½Ì¹¹Ù¥É½¸¹Ð¡¹Ù}­ä°¤¹ÍÑÉ¥À ¤(¥¹½ÐÙ°¹¡É}­äè(Ù°ôÉÅÕÍÐ¹¡ÉÌ¹Ð¡¡É}­ä°¤¹ÍÑÉ¥À ¤(ÉÑÕÉ¸Ù°½ÈÕ±Ð()} ¤´ø¥Ðè(ÉÑÕÉ¸ì(µé½¹}è±½Ð¡½Ì¹¹Ù¥É½¸¹Ð 5i=9}}A
+P°ÄÔ¤¤°(Í¡½Á¥å}è±½Ð¡½Ì¹¹Ù¥É½¸¹Ð M!=A%e}}A
+P°È¤¤°(ÍÑÉ¥Á}ÁÐè±½Ð¡½Ì¹¹Ù¥É½¸¹Ð MQI%A}}A
+P°È¸ä¤¤°(ÍÑÉ¥Á}¥áè±½Ð¡½Ì¹¹Ù¥É½¸¹Ð MQI%A}%a}°À¸ÌÀ¤¤°(½Í}ÁÉ}Õ¹¥Ðè±½Ð¡½Ì¹¹Ù¥É½¸¹Ð 
+=M}AI}U9%P°Äà¤¤°±±¬½¹±ä(Í¡¥ÁÁ¥¹}ÁÉ}½ÉÈè±½Ð¡½Ì¹¹Ù¥É½¸¹Ð M!%AA%9}AI}=IH°à¤¤°(ô((RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR (M!=A%d(RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR ()Í¡½Á¥å}Ñ ¡ÍÑ½ÉèÍÑÈ°Ñ½­¸èÍÑÈ°ÉÑ}Ñ}µ¥¸èÍÑÈ¤´ø±¥ÍÐè(ÍÑ½ÉôÍÑ½É¹ÉÁ± ¡ÑÑÁÌè¼¼°¤¹ÉÁ± ¡ÑÑÀè¼¼°¤¹ÉÍÑÉ¥À ¼¤(ÕÉ°ô¡ÑÑÁÌè¼½íÍÑ½Éô½µ¥¸½Á¤¼ÈÀÈÔ´ÄÀ½½ÉÉÌ¹©Í½¸(¡ÉÌôì`µM¡½Á¥äµÍÌµQ½­¸èÑ½­¹ô(ÁÉµÌôì(ÍÑÑÕÌè¹ä°(¥¹¹¥±}ÍÑÑÕÌèÁ¥°(ÉÑ}Ñ}µ¥¸èÉÑ}Ñ}µ¥¸°(±¥µ¥ÐèÈÔÀ°(¥¹±Õ±¥¹}¥ÑµÌÍ¼Ý¸¼ÁÈµM-T
+=L(¥±Ìè¥±½ÉÉ}¹ÕµÈ±ÉÑ}Ð±Ñ½Ñ±}ÁÉ¥±¥¹¹¥±}ÍÑÑÕÌ±Õ±¥±±µ¹Ñ}ÍÑÑÕÌ±¹±±}Ð°(¥±±¥¹}ÉÍÌ±±¥¹}¥ÑµÌ±Õ±¥±±µ¹ÑÌ°(ô(½ÉÉÌômt(Ý¡¥±QÉÕè(ÈôÉÅÕÍÑÌ¹Ð¡ÕÉ°°¡ÉÌõ¡ÉÌ°ÁÉµÌõÁÉµÌ°Ñ¥µ½ÕÐôÈÀ¤(È¹É¥Í}½É}ÍÑÑÕÌ ¤(Ñ ôÈ¹©Í½¸ ¤¹Ð ½ÉÉÌ°mt¤(½ÉÉÌ¹áÑ¹¡Ñ ¤(±¥¹¬ôÈ¹¡ÉÌ¹Ð 1¥¹¬°¤(¹áÑ}ÕÉ°ô9½¹(½ÈÁÉÐ¥¸±¥¹¬¹ÍÁ±¥Ð °¤è(¥É°ô¹áÐ¥¸ÁÉÐè(¹áÑ}ÕÉ°ôÁÉÐ¹ÍÁ±¥Ð ì¥lÁt¹ÍÑÉ¥À ¤¹ÍÑÉ¥À ðø¤(¥¹½Ð¹áÑ}ÕÉ°è(É¬(ÕÉ°ô¹áÑ}ÕÉ°(ÁÉµÌôíô(á±Õ¹±±½ÉÉÌÑ¼µÑ M¡½Á¥äµ¥¸(½ÉÉÌôm¼½È¼¥¸½ÉÉÌ¥¹½Ð¼¹Ð ¹±±}Ð¥t(ÉÑÕÉ¸½ÉÉÌ(()¹½Éµ±¥é}Í¡½Á¥å}½ÉÈ¡¼è¥Ð°Ìè¥Ð¤´ø¥Ðè(
+½¹ÙÉÐÉÜM¡½Á¥ä½ÉÈ¥Ð¥¹Ñ¼½ÕÈÍÑ¹É½ÉµÐÝ¥Ñ áÐ
+=L¸(É½ÍÌô±½Ð¡¼¹Ð Ñ½Ñ±}ÁÉ¥°À¤¤((áÑÉÐ±¥¹¥ÑµÌ½ÈÁÈµM-T
+=L(ÉÝ}¥ÑµÌô¼¹Ð ±¥¹}¥ÑµÌ°mt¤(±¥¹}¥ÑµÌôl(ìÍ­Ôè±¤¹Ð Í­Ô°¤°ÅÕ¹Ñ¥Ñäè±¤¹Ð ÅÕ¹Ñ¥Ñä°Ä¥ô(½È±¤¥¸ÉÝ}¥ÑµÌ(t(Ñ½Ñ±}Õ¹¥ÑÌôÍÕ´¡±¥lÅÕ¹Ñ¥Ñät½È±¤¥¸±¥¹}¥ÑµÌ¤(½Ìô½Í}½É}±¥¹}¥ÑµÌ Í¡½Á¥ä°±¥¹}¥ÑµÌ°Íl½Í}ÁÉ}Õ¹¥Ðt¤((Á±Ñ½Éµ}ôÉ½ÍÌ¨¡ÍlÍ¡½Á¥å}t¼ÄÀÀ¤(ÍÑÉ¥Á}ôÉ½ÍÌ¨¡ÍlÍÑÉ¥Á}ÁÐt¼ÄÀÀ¤¬ÍlÍÑÉ¥Á}¥át(Í¡¥ÁÁ¥¹}½ÍÐôÍlÍ¡¥ÁÁ¥¹}ÁÉ}½ÉÈt(Ñ½Ñ±}ÌôÁ±Ñ½Éµ}¬ÍÑÉ¥Á}¬½Ì¬Í¡¥ÁÁ¥¹}½ÍÐ((¥±°ô¼¹Ð ¥±±¥¹}ÉÍÌ¤½Èíô(¹µôí¥±°¹Ð ¥ÉÍÑ}¹µ°¥ôí¥±°¹Ð ±ÍÑ}¹µ°¥ô¹ÍÑÉ¥À ¤½È
+ÕÍÑ½µÈ((áÑÉÐÑÉ­¥¹¥¹¼É½´Õ±¥±±µ¹ÑÌ(Õ±¥±±µ¹ÑÌô¼¹Ð Õ±¥±±µ¹ÑÌ°mt¤(ÑÉ­¥¹}¥¹¼ômt(½ÈÕ°¥¸Õ±¥±±µ¹ÑÌè(Ñ¸ôÕ°¹Ð ÑÉ­¥¹}¹ÕµÈ°¤(ÑôÕ°¹Ð ÑÉ­¥¹}½µÁ¹ä°¤(ÑÔôÕ°¹Ð ÑÉ­¥¹}ÕÉ°°¤(¥Ñ¸è(ÑÉ­¥¹}¥¹¼¹ÁÁ¹¡ìÑÉ­¥¹}¹ÕµÈèÑ¸°ÉÉ¥ÈèÑ°ÑÉ­¥¹}ÕÉ°èÑÕô¤((ÉÑÕÉ¸ì(¥èM µí¼¹Ð ½ÉÉ}¹ÕµÈ°¼¹Ð ¥°¤¥ô°(Á±Ñ½É´èÍ¡½Á¥ä°(ÉÑ}Ðè¼¹Ð ÉÑ}Ð°¤°(É½ÍÌèÉ½Õ¹¡É½ÍÌ°È¤°(Õ¹¥ÑÌèÑ½Ñ±}Õ¹¥ÑÌ°(ÕÍÑ½µÈè¹µ°(ÍÑÑÕÌè¼¹Ð ¥¹¹¥±}ÍÑÑÕÌ°¤°(Õ±¥±±µ¹Ñ}ÍÑÑÕÌè¼¹Ð Õ±¥±±µ¹Ñ}ÍÑÑÕÌ¤½ÈÕ¹Õ±¥±±°(ÑÉ­¥¹èÑÉ­¥¹}¥¹¼°(Á±Ñ½Éµ}èÉ½Õ¹¡Á±Ñ½Éµ}°È¤°(ÍÑÉ¥Á}èÉ½Õ¹¡ÍÑÉ¥Á}°È¤°(½ÌèÉ½Õ¹¡½Ì°È¤°(Í¡¥ÁÁ¥¹èÉ½Õ¹¡Í¡¥ÁÁ¥¹}½ÍÐ°È¤°(Ñ½Ñ±}ÌèÉ½Õ¹¡Ñ½Ñ±}Ì°È¤°(¹ÐèÉ½Õ¹¡É½ÍÌ´Ñ½Ñ±}Ì°È¤°(±¥¹}¥ÑµÌèl(ì(Í­Ôè±¤¹Ð Í­Ô°¤°(Ñ¥Ñ±è±¤¹Ð ¹µ°±¤¹Ð Ñ¥Ñ±°¤¤°(ÅÕ¹Ñ¥Ñäè±¤¹Ð ÅÕ¹Ñ¥Ñä°Ä¤°(Õ¹¥Ñ}ÁÉ¥è±½Ð¡±¤¹Ð ÁÉ¥°À¤¤°(½Ìè¡}
+=MlÍ¡½Á¥ät¹Ð¡±¤¹Ð Í­Ô°¤°íô¤¹Ð ½Ì°Íl½Í}ÁÉ}Õ¹¥Ðt¤¤(¨±¤¹Ð ÅÕ¹Ñ¥Ñä°Ä¤°(ô(½È±¤¥¸ÉÝ}¥ÑµÌ(t°(ô(()ÁÀ¹É½ÕÑ ½Á¤½Í¡½Á¥ä½½ÉÉÌ¤)Ñ}Í¡½Á¥å}½ÉÉÌ ¤è(ÍÑ½Éô M!=A%e}MQ=I°`µM¡½Á¥äµMÑ½É¤(Ñ½­¸ô M!=A%e}Q=-8°`µM¡½Á¥äµQ½­¸¤(ÍÑÉÐôÉÅÕÍÐ¹ÉÌ¹Ð ÍÑÉÐ°(¡ÑÑ¥µ¹ÑÑ¥µ¹ÕÑ¹½Ü ¤´ÑÑ¥µ¹Ñ¥µ±Ñ¡åÌôÌÀ¤¤¹¥Í½½ÉµÐ ¤¬h¤(¥¹½ÐÍÑ½É½È¹½ÐÑ½­¸è(ÉÑÕÉ¸©Í½¹¥ä¡ìÉÉ½Èè5¥ÍÍ¥¹M¡½Á¥äÉ¹Ñ¥±Ìô¤°ÐÀÀ(ÑÉäè(ÉÜôÍ¡½Á¥å}Ñ ¡ÍÑ½É°Ñ½­¸°ÍÑÉÐ¤(Ìô} ¤(½ÉÉÌôm¹½Éµ±¥é}Í¡½Á¥å}½ÉÈ¡¼°Ì¤½È¼¥¸ÉÝt(ÉÑÕÉ¸©Í½¹¥ä¡ì½ÉÉÌè½ÉÉÌ°½Õ¹Ðè±¸¡½ÉÉÌ¥ô¤(áÁÐÉÅÕÍÑÌ¹!QQAÉÉ½ÈÌè(ÉÑÕÉ¸©Í½¹¥ä¡ìÉÉ½ÈèÍÑÈ¡¤°ÍÑÑÕÌè¹ÉÍÁ½¹Í¹ÍÑÑÕÍ}½ô¤°ÔÀÈ(áÁÐáÁÑ¥½¸Ìè(ÉÑÕÉ¸©Í½¹¥ä¡ìÉÉ½ÈèÍÑÈ¡¥ô¤°ÔÀÀ(((RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR ¢2Ô¤ôâ5Ô¢2)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)H)HVÓÓÐWÕTHÎËØ\K[X^ÛÛÛKØ]]ÛÌÝÚÙ[SPVÓÑSÒSÈHÂ\ËYX\ÝLHÎËÜÙ[[Ü\\\K[K[X^ÛÛÛH]K]Ù\ÝLHÎËÜÙ[[Ü\\\KY]K[X^ÛÛÛH\Ë]Ù\ÝLÎËÜÙ[[Ü\\\KYK[X^ÛÛÛHBÛØWØØXÚNXÝHßBYÙ]ÛØWÝÚÙ[ÛY[ÚYÝÛY[ÜÙXÜ]ÝY\ÚÝÚÙ[ÝHOÝÝÈH[YK[YJ
+BØXÚYHÛØWØØXÚKÙ]
+ÛY[ÚY
+BYØXÚY[ØXÚYÈ^\\ÈHÝÈ
+È
+]\ØXÚYÈÚÙ[BH\]Y\ÝËÜÝ
+SPVÓÓÐWÕT]O^ÂÜ[Ý\HY\ÚÝÚÙ[Y\ÚÝÚÙ[Y\ÚÝÚÙ[ÛY[ÚYÛY[ÚYÛY[ÜÙXÜ]ÛY[ÜÙXÜ]K[Y[Ý]LMJBZ\ÙWÙÜÜÝ]\Ê
+B]HHÛÛ
+BÚÙ[H]VÈXØÙ\Ü×ÝÚÙ[BÛØWØØXÚVØÛY[ÚYHHÈÚÙ[ÚÙ[^\\ÈÝÈ
+È]KÙ]
+^\\×Ú[Í
+_B]\ÚÙ[YØ[X^ÛÚXY\ÊXØÙ\Ü×ÝÚÙ[ÝHOXÝ]\ÂX[^XXØÙ\ÜË]ÚÙ[XØÙ\Ü×ÝÚÙ[X[^Y]H]][YK]][YK]ÛÝÊ
+KÝ[YJVI[IY	R	SITÖK\Ù\PYÙ[X\X[[Q^\ÜÑ\ÚØ\ÌË
+[ÝXYÙOT]ÛHBY[X^ÛÙ]ÚÛÜ\ÊÛY[ÚYÛY[ÜÙXÜ]Y\ÚÝÚÙ[X\Ù]XÙKYÚ[ÛÜX]YØY\HO\Ý[Ú[HSPVÓÑSÒSËÙ]
+YÚ[ÛSPVÓÑSÒSÖÈ\ËYX\ÝLHJBÚÙ[HÙ]ÛØWÝÚÙ[ÛY[ÚYÛY[ÜÙXÜ]Y\ÚÝÚÙ[BÜ\Ë^ÝÚÙ[H×KÛBÚ[HYN\[\ÈHÈ^ÚÙ[^ÝÚÙ[HY^ÝÚÙ[[ÙHÒX\Ù]XÙRYÈX\Ù]XÙKÜX]YY\ÜX]YØY\Ü\Ý]\Ù\ÈÚ\Y[Ú\Y\X[TÚ\Y[[ÈX^\Ý[Ô\YÙHLBH\]Y\ÝËÙ]
+[Ú[KÛÜ\ËÝÛÜ\ÈXY\ÏWØ[X^ÛÚXY\ÊÚÙ[K\[\Ï\\[\Ë[Y[Ý]L
+BYÝ]\×ØÛÙHOH
+N[YKÛY\
+BÛÛ[YBZ\ÙWÙÜÜÝ]\Ê
+B^[ØYHÛÛ
+KÙ]
+^[ØYßJBÜ\Ë^[
+^[ØYÙ]
+Ü\È×JJB^ÝÚÙ[H^[ØYÙ]
+^ÚÙ[BYÝ^ÝÚÙ[XZÂ]\Ü\ÂY[X^ÛÙ]ÚÛÜ\Ú][\ÊÜ\ÚYÝÛY[ÚYÝÛY[ÜÙXÜ]ÝY\ÚÝÚÙ[ÝYÚ[ÛÝHO\Ý]Ú[H][\ÈÜHÚ[ÛH[X^ÛÜ\
+TÒS[][]Z[
+K[Ú[HSPVÓÑSÒUËÙ]
+YÚ[ÛSPVÓÑSÒSÖÈ\ËYX\ÝLHJBÚÙ[HÙ]ÛØWÝÚÙ[ÛY[ÚYÛY[ÜÙXÜ]Y\ÚÝÚÙ[B][\Ë^ÝÚÙ[H×KÛBÚ[HYN\[\ÈHÈ^ÚÙ[^ÝÚÙ[HY^ÝÚÙ[[ÙHßBH\]Y\ÝËÙ]
+Ù[Ú[KÛÜ\ËÝÛÜ\ËÞÛÜ\ÚYKÛÜ\][\ÈXY\ÏWØ[X^ÛÚXY\ÊÚÙ[K\[\Ï\\[\Ë[Y[Ý]L
+BYÝ]\×ØÛÙHOH
+N[YKÛY\
+BÛÛ[YBZ\ÙWÙÜÜÝ]\Ê
+B^[ØYHÛÛ
+KÙ]
+^[ØYßJB][\Ë^[
+^[ØYÙ]
+Ü\][\È×JJB^ÝÚÙ[H^[ØYÙ]
+^ÚÙ[BYÝ^ÝÚÙ[XZÂ]\][\ÂYÜX[^WØ[X^ÛÛÜ\ÎXÝY\ÎXÝÜ\Ú][\Î\ÝHÛJHOXÝÛÛ\]È[X^ÛÜ\ÈÝ[\ÜX]\Ù\ÈTÒSÓÑÔÈYÜ\Ú][\ÈÝYYÜÜÜÈHØ]
+
+ËÙ]
+Ü\Ý[HÜßJKÙ]
+[[Ý[
+JBYÜ\Ú][\Î[WÚ][\ÈHÂÈ\Ú[KÙ]
+TÒSK]X[]H[
+KÙ]
+]X[]SÜ\YJJ_BÜH[Ü\Ú][\ÂBÝ[Ý[]ÈHÝ[JVÈ]X[]HHÜH[[WÚ][\ÊBÛÙÜÈHÛÙÜ×ÙÜÛ[WÚ][\Ê[X^Û[WÚ][\ËY\ÖÈÛÙÜ×Ü\Ý[]JB][\×ÛÝ]HÂÂ\Ú[KÙ]
+TÒSK]HKÙ]
+]HVÎK]X[]H[
+KÙ]
+]X[]SÜ\YJJK[]ÜXÙHØ]
+
+KÙ]
+][TXÙHHÜßJKÙ]
+[[Ý[
+JKÛÙÜÈ
+ÐÓÑÔÖÈ[X^ÛKÙ]
+KÙ]
+TÒSKßJKÙ]
+ÛÙÜÈY\ÖÈÛÙÜ×Ü\Ý[]JJB
+[
+KÙ]
+]X[]SÜ\YJJKBÜH[Ü\Ú][\ÂB[ÙNÈ[XÚÎÙZYÚYX]\YÙH][ÈÛHÓÑÔÈXH
+
+JBÝ[Ý[]ÈH[
+ËÙ]
+[X\Ù][\ÔÚ\YHÜËÙ]
+[X\Ù][\Õ[Ú\YHÜJBÛÙÜÈHÝ[
+ÜÜÜÈ
+SPVÓÐÓÑÔ×ÔUSËB][\×ÛÝ]H×B[X^ÛÙYHHÜÜÜÈ
+
+Y\ÖÈ[X^ÛÙYHHÈL
+BÚ\[×ØÛÜÝHY\ÖÈÚ\[×Ü\ÛÜ\BÝ[ÙY\ÈH[X^ÛÙYH
+ÈÛÙÜÈ
+ÈÚ\[×ØÛÜÝ]\ÂYËÙ]
+[X^ÛÜ\YK]ÜH[X^ÛÜX]YØ]ËÙ]
+\Ú\ÙQ]HKÜÜÜÈÝ[
+ÜÜÜËK[]ÈÝ[Ý[]ËÝ\ÝÛY\[X^ÛÝ\ÝÛY\Ý]\ÈËÙ]
+Ü\Ý]\ÈK[[Y[ÜÝ]\ÈÈÚ\Y[[Y\X[TÚ\Y\X[KÙ]
+ËÙ]
+Ü\Ý]\ÈK[[[YKXÚÚ[È×KÈ[X^ÛXÚÚ[È]ÚYÙ\\][HXHØ\Y\T\Â]ÜWÙYHÝ[
+[X^ÛÙYKKÝ\WÙYHÛÙÜÈÛÙÜËÚ\[ÈÝ[
+Ú\[×ØÛÜÝKÝ[ÙY\ÈÝ[
+Ý[ÙY\ËK]Ý[
+ÜÜÜÈHÝ[ÙY\ËKÛÙÜ×ÛY]Ù\Ø\Ú[YÜ\Ú][\È[ÙHÙZYÚYÜ][È[WÚ][\È][\×ÛÝ]B\Ý]JØ\KØ[X^ÛÛÜ\ÈBYÙ]Ø[X^ÛÛÜ\Ê
+NÛY[ÚYHÙÊSPVÓÐÓQSÒQP[X^ÛPÛY[RYBÛY[ÜÙXÜ]HÙÊSPVÓÐÓQSÔÑPÔUP[X^ÛPÛY[TÙXÜ]BY\ÚÝÚÙI[HÙÊSPVÓÔQTÒÕÒÑSP[X^ÛTY\ÚUÚÙ[BX\Ù]XÙHHÙÊSPVÓÓPTÑUPÑWÒQP[X^ÛSX\Ù]XÙHUÒRÖTBYÚ[ÛHÙÊSPVÓÔQÒSÓP[X^ÛTYÚ[Û\ËYX\ÝLHBÝ\H\]Y\Ý\ÜËÙ]
+Ý\
+]][YK]][YK]ÛÝÊ
+HH]][YK[YY[J^\ÏLÌ
+JK\ÛÙÜX]
+
+H
+ÈBYÝÛY[ÚYÜÝÛY[ÜÙXÜ]ÜÝY\ÚÝÚÙ[]\ÛÛYJÈ\ÜZ\ÜÚ[È[X^ÛÜY[X[ÈJK
+NY\ÈHYWØÙÊ
+B]ÈH[X^ÛÙ]ÚÛÜ\ÊÛY[ÚYÛY[ÜÙXÜ]Y\ÚÝÚÙ[X\Ù]XÙKYÚ[ÛÝ\
+BÜ\ÈHÛÜX[^WØ[X^ÛÛÜ\ËY\ÊHÜÈ[]×B]\ÛÛYJÈÜ\ÈÜ\ËÛÝ[[Ü\ÊKÛÙÜ×ÛY]ÙÙZYÚYÜ][ÈÝHØ[Ø\KØ[X^ÛÛÜ\Z][\ÈÜ^XÝ\PTÒSÓÑÔÈJB^Ù\\]Y\ÝË\Ü\ÈN]\ÛÛYJÈ\ÜÝJKÝ]\ÈK\ÜÛÙKÝ]\×ØÛÙ_JK
+L^Ù\^Ù\[Û\ÈN]\ÛÛYJÈ\ÜÝJ_JK
+L\Ý]JØ\KØ[X^ÛÛÜ\Z][\ÈBYÙ]Ø[X^ÛÛÜ\Ú][\Ê
+N]Ú^XÝ[H][\È
+Ú]TÒSÊHÜÛH[X^ÛÜ\]\È\PTÒSÓÑÔÈÛHÛÙÜ×Ù]KÛÛ]Y\NÛÜ\ÚYVVVÜ\ÚYH\]Y\Ý\ÜËÙ]
+Ü\ÚYBÛY[ÚYHÙÊSPVÓÐÓQSÒQP[X^ÛPÛY[RYBÛY[ÜÙXÜ]HÙÊSPVÓÐÓQSÔÑPÔUP[X^ÛPÛY[TÙXÜ]BY\ÚÝÚÙ[HÙÊSPVÓÔQTÒÕÒÑSP[X^ÛTY\ÚUÚÙ[BYÚ[ÛHÙÊSPVÓÔQÒSÓP[X^ÛTYÚ[Û\ËYX\ÝLHBYÝÜ\ÚY]\ÛÛYJÈ\ÜÜ\ÚY]Y\H\[H\]Z\YJK
+NY\ÈHYWØÙÊ
+B][\ÈH[X^ÛÙ]ÚÛÜ\Ú][\ÊÜ\ÚYÛY[ÚYÛY[ÜÙXÜ]Y\ÚÝÚÙ[YÚ[ÛB[XÚYH×BÜH[][\Î\Ú[HKÙ]
+TÒSB]HH[
+KÙ]
+]X[]SÜ\YJJBÛÙÜ×ÜXÈHÐÓÑÔÖÈ[X^ÛKÙ]
+\Ú[ßJB[XÚY\[
+Â\Ú[\Ú[Ù[\ÜÚÝHKÙ]
+Ù[\ÒÕHK]HKÙ]
+]HVÎLK]X[]H]K[]ÜXÙHØ]
+
+KÙ]
+][TXÙHHÜßJKÙ]
+[[Ý[
+JKÛÙÜ×Ü\Ý[]ÛÙÜ×ÜXËÙ]
+ÛÙÜÈY\ÖÈÛÙÜ×Ü\Ý[]JKÛÙÜ×ÝÝ[Ý[
+ÛÙÜ×ÜXËÙ]
+ÛÙÜÈY\ÖÈÛÙÜ×Ü\Ý[]JH
+]KK[ØÛÙÜ×ÝXHÛÛ
+ÛÙÜ×ÜXÊKJB]\ÛÛYJÈÜ\ÚYÜ\ÚY][\È[XÚYÛÝ[[[XÚY
+_JB^Ù\^Ù\[Û\ÈN]\ÛÛYJÈ\ÜÝJ_JK
+LÈ8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ ÈÕSSPTH
+\ÙYHZ[H[YÜ[H\Ü
+BÈ8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ \Ý]JØ\KÜÝ[[X\HBYÙ]ÜÝ[[X\J
+N\[ÙH\]Y\Ý\ÜËÙ]
+\[ÙY\Ý\^HB]H]][YK[Y^ÛJ]][YK[YY[JÝ\ÏKM
+JBÝ×Ù]H]][YK]][YKÝÊ]
+BY\[ÙOHY\Ý\^H^HHÝ×Ù]H]][YK[YY[J^\ÏLJBÝ\H]][YK]][YJ^KYX\^K[Û^K^K[ÏY]
+B[H]][YK]][YJ^KYX\^K[Û^K^KË
+NK
+NK[ÏY]
+B[Y\[ÙOHÙ^HÝ\HÝ×Ù]\XÙJÝ\LZ[]OLÙXÛÛL
+B[HÝ×Ù][Y\[ÙOHÙYZÈÝ\H
+Ý×Ù]H]][YK[YY[J^\Ï[Ý×Ù]ÙYZÙ^J
+JJK\XÙJÝ\LZ[]OLÙXÛÛL
+B[HÝ×Ù][ÙNÈ[ÛÝ\HÝ×Ù]\XÙJ^OLKÝ\LZ[]OLÙXÛÛL
+B[HÝ×Ù]Ý\Ú\ÛÈHÝ\\Ý[Y^ÛJ]][YK[Y^ÛK]ÊK\ÛÙÜX]
+
+K\XÙJÌBY\ÈHYWØÙÊ
+B\ÜÈH×BÜ\ÈH×BÝÜHHÙÊÒÔQWÔÕÔHTÚÜYKTÝÜHBÚÙ[HÙÊÒÔQWÕÒÑSTÚÜYKUÚÙ[BYÝÜH[ÚÙ[NÜÈ[ÚÜYWÙ]Ú
+ÝÜKÚÙ[Ý\Ú\ÛÊNH]][YK]][YKÛZ\ÛÙÜX]
+ÖÈÜX]YØ]K\XÙJÌJK\Ý[Y^ÛJ]
+BYÝ\HH[Ü\Ë\[
+ÜX[^WÜÚÜYWÛÜ\ËY\ÊJB^Ù\^Ù\[Û\ÈN\ÜË\[
+ÚÜYNÙ_HBÛY[ÚYHÙÊSPVÓÐÓQSÒQP[X^ÛPÛY[RYBÛY[ÜÙXÜ]HÙÊSPVÓÐÓQSÔÑPÔUP[X^ÛPÛY[TÙXÜ]BY\ÚÝÚÙ[HÙÊSPVÓÔQTÒÕÒÑSP[X^ÛTY\ÚUÚÙ[BX\Ù]XÙHHÙÊSPVÓÓPTÑTPÑWÒQP[X^ÛSX\Ù]XÙHUÒRÖTBYÚ[ÛHÙÊSPVÓÔQÒSÓP[X^ÛTYÚ[Û\ËYX\ÝLHBYÛY[ÚY[ÛY[ÜÙXÜ][Y\ÚÝÚÙ[NÜÈ[[X^ÛÙ]ÚÛÜ\ÊÛY[ÚYÛY[ÜÙXÜ]Y\ÚÝÚÙ[X\Ù]XÙKYÚ[ÛÝ\Ú\ÛÊN]×ÙHËÙ]
+\Ú\ÙQ]HBYÝ]×ÙÛÛ[YBH]][YK]][YKÛZ\ÛÙÜX]
+]×Ù\XÙJÌJK\Ý[Y^ÛJ]
+BYÝ\HH[Ü\Ë\[
+ÜX[^WØ[X^ÛÛÜ\ËY\ÊJB^Ù\^Ù\[Û\ÈN\ÜË\[
+[X^ÛÙ_HBÝ[ÈHÂÝ[ÛÜ\È[Ü\ÊKÚÜYWÛÜ\ÈÝ[JHÜÈ[Ü\ÈYÖÈ]ÜHHOHÚÜYHK[X^ÛÛÜ\ÈÝ[JHÜÈ[Ü\ÈYÖÈ]ÜHHOH[X^ÛKÜÜÜ×Ü][YHÝ[
+Ý[JÖÈÜÜÜÈHÜÈ[Ü\ÊKK[X^ÛÙY\ÈÝ[
+Ý[JÖÈ]ÜWÙYHHÜÈ[Ü\ÂYÖÈ]ÜHHOH[X^ÛKKÚÜYWÙY\ÈÝ[
+Ý[JÖÈ]ÜWÙYHHÜÈ[Ü\ÂYÖÈ]ÜHHOHÚÜYHKKÝ\WÙY\ÈÝ[
+Ý[JÖÈÝ\WÙYHHÜÈ[Ü\ÊKKÛÙÜÈÝ[
+Ý[JÖÈÛÙÜÈHÜÈ[Ü\ÊKKÚ\[ÈÝ[
+Ý[JËÙ]
+Ú\[È
+HÜÈ[Ü\ÊKKÝ[ÙY\ÈÝ[
+Ý[JÖÈÝ[ÙY\ÈHÜÈ[Ü\ÊKK]Ü][YHÝ[
+Ý[JÖÈ]HÜÈ[Ü\ÊKKÝ[Ý[]ÈÝ[JÖÈ[]ÈHÜÈ[Ü\ÊK\[Ù\[Ù\[ÙÜÝ\Ý\\ÛÙÜX]
+
+K\[ÙÙ[[\ÛÙÜX]
+
+K\ÜÈ\ÜËBÈHÝ[ÖÈÜÜÜ×Ü][YHBÝ[ÖÈ]ÛX\Ú[HHÝ[
+Ý[ÖÈ]Ü][YHHÈÈ
+LJHYÈ[ÙHÝ[ÖÈ]×ÛÜ\HHÝ[
+ÈÈÝ[ÖÈÝ[ÛÜ\ÈKHYÝ[ÖÈÝ[ÛÜ\ÈH[ÙHÝ[ÖÈ[ÜÛÝÛYHHÝ[ÖÈÛÙÜÈBÝ[ÖÈÛÙÜ×ÜÛÝ\ÙHHH\ÜÚÝHYÐÓÑÔÖÈÚÜYHH[ÙH]Ü]H]\ÛÛYJÝ[ÊBÈ8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ ÈÓÑÔÈSÒSÂÈ8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ B\Ý]JØ\KØÛÙÜÈBYÙ]ØÛÙÜ×ÝXJ
+N]\ÛÛYJÂY]HÐÓÑÔËÙ]
+Y]HßJK[X^ÛÐÓÑÔËÙ]
+[X^ÛßJKÚÜYHÐÓÑÔËÙ]
+ÚÜYHßJKJB\Ý]JØ\KØÛÙÜËØ[X^ÛÏ\Ú[BYÙ]Ø[X^ÛØÛÙÜÊ\Ú[NXÈHÐÓÑÔÖÈ[X^ÛKÙ]
+\Ú[BYÝXÎ]\ÛÛYJÈ\ÜTÒSØ\Ú[HÝ[ÓÑÔÈXH[XÚ×Ü][ÈSPVÓÐÓÑÔ×ÔUSßK
+
+]\ÛÛYJÈ\Ú[\Ú[
+XßJB\Ý]JØ\KØÛÙÜËÜÚÜYKÏÚÝOBYÙ]ÜÚÜYWØÛÙÜÊÚÝJNXÈHÐÓÑÔÖÈÚÜYHKÙ]
+ÚÝJBYÝXÎ]\ÛÛYJÈ\ÜÒÕHÜÚÝ_HÝ[ÓÑÔÈXH[XÚ×Ü\Ý[]YWØÙÊ
+VÈÛÙÜ×Ü\Ý[]_K
+
+]\ÛÛYJÈÚÝHÚÝK
+XßJBÈ8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ ÈTÔÕÓÔÕPÕSÓÈ8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ TÒÐTÔTÔÕÓÔHÜË[\ÛÙ]
+TÒÐTÔTÔÕÓÔBYØÚXÚ×Ø]]
+\JN]\YHY\]Y\ÝØ\Y\ÈH[YÙ\ÜÚ[ÛÚÙ[YÝTÒÐTÔTÔÕÓÔ]\YHÈÈ\ÜÝÛÜÙ]8¡¤Ü[XØÙ\ÜÂÚÙ[H\KÛÛÚÚY\ËÙ]
+ZWÝÚÙ[B]\ÚÙ[OHTÒÐTÔTÔÕÓÔYÛÙÚ[ÜYÙJ\ÜQ[ÙJN\Ú[H	ÏÝ[OHÛÛÜÙÙYNÛX\Ú[]ÜLÙÛ\Ú^NLÜ[ÛÜXÝ\ÜÝÛÜÜÈY\Ü[ÙH	ÉÂ]\QÐÕTH[[XYY]HÚ\Ù]HUNY]H[YOHY]ÜÜÛÛ[HÚYY]XÙK]ÚY[]X[\ØØ[OLH]OX\X[[H^\ÜÏÝ]OÝ[O
+ÞØÞ\Ú^[ÎÜ\XÞÛX\Ú[ÜY[Î_BÙ^ÞØXÚÙÜÝ[ÌLLØÛÛÜÙYYNÙÛY[Z[NX\K\Þ\Ý[K[ÓXXÔÞ\Ý[QÛ	Ò[\Ë	ÔÙYÛÙHRIËØ[Ë\Ù\YÂ\Ü^N^Ø[YÛZ][\ÎÙ[\Ú\ÝYKXÛÛ[Ù[\ÛZ[ZZYÚL_BÞÞØXÚÙÜÝ[ÌNNXØÜ\\ÛÛYÌÌÌNØÜ\\Y]\ÎLÜY[ÎÝÚYÍÝ^X[YÛÙ[\_BÙÛÞÞÙÛ\Ú^NNÙÛ]ÙZYÚÌÛ]\\ÜXÚ[ÎKÜÛX\Ú[XÝÛN_BÙÛÈÜ[ÞØÛÛÜÍÍ__BÝXÞÙÛ\Ú^NLØÛÛÜÍLLXÛX\Ú[XÝÛN_B[]ÞÝÚYL	NÜY[ÎLLØXÚÙÜÝ[ÌLLLLLÎØÜ\\ÛÛYÌÌÌNØÜ\\Y]\ÎÂÛÛÜÙYYNÙÛ\Ú^NMÛÝ][NÛNÝ[Ú][ÛÜ\M\ß_B[]ØÝ\ÞÞØÜ\XÛÛÜÍÍ__B]ÛÞÛX\Ú[]ÜLÝÚYL	NÜY[ÎLØXÚÙÜÝ[ÍÍNØÜ\ÛNØÜ\\Y]\ÎÂÛÛÜÙÙÛ\Ú^NMÙÛ]ÙZYÚØÝ\ÛÜÚ[\Ý[Ú][ÛXÚÙÜÝ[M\ß_B]ÛÝ\ÞØXÚÙÜÝ[ÎNÙ_BÜÝ[OÚXYÙO]Û\ÜÏHÞ
+eBOÙ]ØÙOÚ[\Ý]JÛÙÚ[Y]ÙÏVÈÑUÔÕJBYÙÚ[
+NÛH\ÚÈ[\ÜXZÙWÜ\ÜÛÙKY\XÝY\]Y\ÝY]ÙOHÔÕÙH\]Y\ÝÜKÙ]
+\ÜÝÛÜBYÙOHTÒÐTÔTÔÕÓÔ\ÜHXZÙWÜ\ÜÛÙJY\XÝ
+ÈJB\ÜÙ]ØÛÛÚÚYJZWÝÚÙ[ÙX^ØYÙOM
+
+
+ÌÛOUYKØ[Y\Ú]OH^B]\\Ü]\ÛÙÚ[ÜYÙJ\ÜUYJK
+B]\ÛÙÚ[ÜYÙJ
+B\Ý]JÛÙÛÝ]BYÙÛÝ]
+
+NÛH\ÚÈ[\ÜXZÙWÜ\ÜÛÙKY\XÝ\ÜHXZÙWÜ\ÜÛÙJY\XÝ
+ÛÙÚ[JB\Ü[]WØÛÛÚÚYJZÙWÝÚÙ[B]\\ÜÈ8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ ÈTÒÐT
+Ù\\È\ÚØ\[]HÛÝT
+BÈ8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ \Ý]JÈBY\ÚØ\
+
+NÛH\ÚÈ[\ÜY\XÝYTÒÐTÔTÔÕÓÔ[ÝØÚXÚ×Ø]]
+\]Y\Ý
+N]\Y\XÝ
+ÛÙÚ[B[Ü]HÜË]Ú[ÜË]\[YJÜË]XÜ]
+×Ù[W×ÊJK\ÚØ\[BYÜË]^\ÝÊ[Ü]
+NÚ]Ü[[Ü][ÛÙ[ÏH]NH\ÈÛÛ[HXY
+
+B]\ÛÛ[ÈÛÛ[U\H^Ú[ÈÚ\Ù]]]NB
