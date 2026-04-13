@@ -335,6 +335,7 @@ async function init
     .wf-bar.b-gross { background: var(--accent); }
     .wf-bar.b-fee   { background: var(--danger); }
     .wf-bar.b-cogs  { background: var(--warning); }
+    .wf-bar.b-ship  { background: var(--info, #60a5fa); }
     .wf-bar.b-net   { background: var(--success); }
     .wf-net-row { margin-top: 14px; }
     .wf-net-row .wf-track { height: 10px; }
@@ -605,6 +606,11 @@ async function init
       <div class="kpi-sub" id="kpi-cogs-sub"></div>
     </div>
     <div class="kpi">
+      <div class="kpi-label">Shipping</div>
+      <div class="kpi-val warn" id="kpi-ship">—</div>
+      <div class="kpi-sub" id="kpi-ship-sub"></div>
+    </div>
+    <div class="kpi">
       <div class="kpi-label">Net Revenue</div>
       <div class="kpi-val pos" id="kpi-net">—</div>
       <div class="kpi-sub" id="kpi-net-sub"></div>
@@ -689,6 +695,11 @@ async function init
           </div>
           <div class="wf-track"><div class="wf-bar b-cogs" id="wf-cogs-bar" style="width:0%"></div></div>
         </div>
+        <div class="wf-row">
+          <span class="wf-label">Shipping</span>
+          <div class="wf-bar-wrap"><div class="wf-bar b-ship" id="wf-ship-bar" style="width:0%"></div></div>
+          <span class="wf-val" id="wf-ship-val">-</span>
+        </div>
         <div class="wf-row wf-net-row">
           <div class="wf-meta">
             <span class="wf-label" style="font-weight:600;color:var(--text)">Net Revenue</span>
@@ -731,6 +742,7 @@ async function init
             <th>Platform Fee</th>
             <th>Stripe</th>
             <th>COGS</th>
+            <th>Ship</th>
             <th>Net</th>
           </tr>
         </thead>
@@ -926,7 +938,7 @@ function calcFees(order) {
     const pf = order._platformFee, sf = order._stripeFee, cogs = order._cogs;
     return { platformFee: pf, amazonFee: order.platform==='amazon'?pf:0,
       shopifyFee: order.platform==='shopify'?pf:0,
-      stripeFee: sf, cogs, totalFees: pf+sf+cogs, net: order._net,
+      stripeFee: sf, cogs, shipping: order._shipping||0, totalFees: pf+sf+cogs+(order._shipping||0), net: order._net,
       cogsMethod: order._cogsMethod||'per_sku' };
   }
   const c = S.cfg;
@@ -936,7 +948,7 @@ function calcFees(order) {
   const cogs = order.units * c.cogsUnit;
   const totalFees = amazonFee+shopifyFee+stripeFee+cogs;
   return { platformFee: amazonFee||shopifyFee, amazonFee, shopifyFee,
-    stripeFee, cogs, totalFees, net: order.gross-totalFees, cogsMethod:'flat_rate' };
+    stripeFee, cogs, shipping:0, totalFees, net: order.gross-totalFees, cogsMethod:'flat_rate' };
 }
 
 // ── FILTER ───────────────────────────────────────────────────
@@ -956,15 +968,15 @@ function filteredOrders() {
 
 // ── AGGREGATE ────────────────────────────────────────────────
 function aggregate(orders) {
-  let gross=0,amazonFee=0,shopifyFee=0,stripeFee=0,cogs=0,units=0,shN=0,amN=0;
+  let gross=0,amazonFee=0,shopifyFee=0,stripeFee=0,cogs=0,shipping=0,units=0,shN=0,amN=0;
   orders.forEach(o => {
     const f=calcFees(o);
     gross+=o.gross; amazonFee+=f.amazonFee; shopifyFee+=f.shopifyFee;
-    stripeFee+=f.stripeFee; cogs+=f.cogs; units+=o.units;
+    stripeFee+=f.stripeFee; cogs+=f.cogs; shipping+=f.shipping; units+=o.units;
     o.platform==='shopify'?shN++:amN++;
   });
-  const totalFees=amazonFee+shopifyFee+stripeFee, net=gross-totalFees-cogs;
-  return { total:orders.length,shN,amN,gross,amazonFee,shopifyFee,stripeFee,cogs,totalFees,net,units };
+  const totalFees=amazonFee+shopifyFee+stripeFee, net=gross-totalFees-cogs-shipping;
+  return { total:orders.length,shN,amN,gross,amazonFee,shopifyFee,stripeFee,cogs,shipping,totalFees,net,units };
 }
 
 // ── RENDER KPIs ──────────────────────────────────────────────
@@ -976,6 +988,8 @@ function renderKPIs(a) {
   document.getElementById('kpi-fees-sub').textContent  = `Amazon ${fmt(a.amazonFee)} · Shopify ${fmt(a.shopifyFee)} · Stripe ${fmt(a.stripeFee)}`;
   document.getElementById('kpi-cogs').textContent      = fmt(a.cogs);
   document.getElementById('kpi-cogs-sub').textContent  = `${a.units.toLocaleString()} units`;
+      getElementById('kpi-ship').textContent      = fmt(a.shipping);
+      getElementById('kpi-ship-sub').textContent  = a.total+' orders';
   document.getElementById('kpi-net').textContent       = fmt(a.net);
   document.getElementById('kpi-net-sub').textContent   = `${a.gross>0?((a.net/a.gross)*100).toFixed(1):'0'}% margin`;
   document.getElementById('kpi-vendor').textContent    = fmt(a.cogs);
@@ -1069,6 +1083,7 @@ function renderWaterfall(agg) {
   set('wf-sfee-bar',  agg.shopifyFee);val('wf-sfee-val', '-'+fmt(agg.shopifyFee));
   set('wf-stfee-bar', agg.stripeFee); val('wf-stfee-val','-'+fmt(agg.stripeFee));
   set('wf-cogs-bar',  agg.cogs);      val('wf-cogs-val', '-'+fmt(agg.cogs));
+      set('wf-ship-bar', agg.shipping);  val('wf-ship-val', '-'+fmt(agg.shipping));
   set('wf-net-bar',   agg.net);       val('wf-net-val',  fmt(agg.net));
   const mg = agg.gross>0 ? ((agg.net/agg.gross)*100).toFixed(1) : 0;
   document.getElementById('wf-net-margin').textContent = mg+'%';
@@ -1141,6 +1156,7 @@ function renderTable(orders) {
       <td class="neg-text">-${fmt(f.platformFee)}</td>
       <td class="neg-text">-${fmt(f.stripeFee)}</td>
       <td class="warn-text" style="white-space:nowrap">-${fmt(f.cogs)} ${cogsLabel}</td>
+            <td class="warn-text">-${fmt(f.shipping)}</td>
       <td class="${f.net>=0?'pos-text':'neg-text'}" style="font-weight:600">${fmt(f.net)}</td>
     </tr>`);
 
@@ -1315,13 +1331,13 @@ async function fetchLiveData(proxy) {
         id:o.id, platform:'shopify', date:new Date(o.created_at),
         gross:o.gross, units:o.units, customer:o.customer, status:o.status,
         _platformFee:o.platform_fee, _stripeFee:o.stripe_fee,
-        _cogs:o.cogs, _net:o.net, _cogsMethod:'per_sku', _lineItems:o.line_items||[]
+        _cogs:o.cogs, _shipping:o.shipping||0, _net:o.net, _cogsMethod:'per_sku', _lineItems:o.line_items||[]
       })),
       ...amData.orders.map(o => ({
         id:o.id, platform:'amazon', date:new Date(o.created_at),
         gross:o.gross, units:o.units, customer:'Amazon Customer', status:o.status,
         _platformFee:o.platform_fee, _stripeFee:0,
-        _cogs:o.cogs, _net:o.net, _cogsMethod:o.cogs_method||'weighted_ratio', _lineItems:o.line_items||[]
+        _cogs:o.cogs, _shipping:o.shipping||0, _net:o.net, _cogsMethod:o.cogs_method||'weighted_ratio', _lineItems:o.line_items||[]
       }))
     ].sort((a,b)=>b.date-a.date);
     render();
