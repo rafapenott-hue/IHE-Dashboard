@@ -988,8 +988,8 @@ function renderKPIs(a) {
   document.getElementById('kpi-fees-sub').textContent  = `Amazon ${fmt(a.amazonFee)} · Shopify ${fmt(a.shopifyFee)} · Stripe ${fmt(a.stripeFee)}`;
   document.getElementById('kpi-cogs').textContent      = fmt(a.cogs);
   document.getElementById('kpi-cogs-sub').textContent  = `${a.units.toLocaleString()} units`;
-      getElementById('kpi-ship').textContent      = fmt(a.shipping);
-      getElementById('kpi-ship-sub').textContent  = a.total+' orders';
+      document.getElementById('kpi-ship').textContent      = fmt(a.shipping);
+      document.getElementById('kpi-ship-sub').textContent  = a.total+' orders';
   document.getElementById('kpi-net').textContent       = fmt(a.net);
   document.getElementById('kpi-net-sub').textContent   = `${a.gross>0?((a.net/a.gross)*100).toFixed(1):'0'}% margin`;
   document.getElementById('kpi-vendor').textContent    = fmt(a.cogs);
