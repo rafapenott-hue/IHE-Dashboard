@@ -8,7 +8,7 @@ Now supports per-SKU COGS:
 
 LOCAL DEV:
     pip install -r requirements.txt
-    python api_server.py
+    python api_server.pyX
 
 DEPLOY TO RENDER:
     Push folder to GitHub â connect in Render dashboard â reads render.yaml.
