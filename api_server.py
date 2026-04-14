@@ -813,6 +813,9 @@ def health():
         "cogs_amazon_skus":    len(_COGS.get("amazon", {})),
         "cogs_shopify_skus":   len(_COGS.get("shopify", {})),
         "amazon_cogs_ratio":   AMAZON_COGS_RATIO,
+        "fedex_configured":    bool(os.environ.get("FEDEX_CLIENT_ID") and os.environ.get("FEDEX_CLIENT_SECRET")),
+        "ups_configured":      bool(os.environ.get("UPS_CLIENT_ID") and os.environ.get("UPS_CLIENT_SECRET")),
+        "usps_configured":     bool(os.environ.get("USPS_CLIENT_ID") and os.environ.get("USPS_CLIENT_SECRET")),
     })
 
 
