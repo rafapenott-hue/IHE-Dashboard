@@ -29,6 +29,7 @@ import os
 import json
 import time
 import datetime
+from typing import Optional
 import requests
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -36,6 +37,253 @@ from flask_cors import CORS
 app  = Flask(__name__)
 CORS(app, origins=["*"])
 PORT = int(os.environ.get("PORT", 5000))
+
+# ─────────────────────────────────────────────────────────────
+# CARRIER TRACKING  (FedEx, UPS, USPS)
+# ─────────────────────────────────────────────────────────────
+
+_TRACK_CACHE     = {}       # {tracking_number: {data, ts}}
+_TRACK_CACHE_TTL = 1800     # 30 min
+_CARRIER_TOKENS  = {}       # {carrier: {token, expires_at}}
+
+
+def _detect_carrier(tracking_number: str, carrier_hint: str = "") -> str:
+    """Detect carrier from tracking number pattern or hint string."""
+    hint = (carrier_hint or "").lower()
+    if "fedex" in hint:                                    return "fedex"
+    if "ups" in hint:                                      return "ups"
+    if "usps" in hint or "united states postal" in hint:   return "usps"
+    tn = (tracking_number or "").strip()
+    if not tn:                                             return "unknown"
+    if tn.upper().startswith("1Z") and len(tn) == 18:      return "ups"
+    if tn.startswith("9") and tn.isdigit() and len(tn) >= 20: return "usps"
+    if tn.isdigit() and len(tn) in (12, 15, 20, 22):      return "fedex"
+    return "unknown"
+
+
+def _norm_status(carrier: str, raw_status: str, code: str = "") -> str:
+    """Map carrier-specific status to unified enum."""
+    s = (raw_status or "").lower()
+    c = (code or "").upper()
+    if carrier == "fedex":
+        if c in ("PU", "OC"):              return "picked_up"
+        if c in ("IT", "IX", "AF"):        return "in_transit"
+        if c == "OD":                      return "out_for_delivery"
+        if c == "DL":                      return "delivered"
+        if c in ("DE", "CA", "SE", "DY"): return "exception"
+        if "deliver" in s:                 return "delivered"
+        if "transit" in s:                 return "in_transit"
+        return "label_created"
+    if carrier == "ups":
+        if "delivered" in s:                                         return "delivered"
+        if "out for delivery" in s:                                  return "out_for_delivery"
+        if any(w in s for w in ("in transit", "departed", "arrived")): return "in_transit"
+        if "picked up" in s or "origin scan" in s:                   return "picked_up"
+        if "exception" in s or "delay" in s:                         return "exception"
+        return "label_created"
+    if carrier == "usps":
+        if "delivered" in s:                                                    return "delivered"
+        if "out for delivery" in s:                                             return "out_for_delivery"
+        if any(w in s for w in ("in transit", "arrived", "departed", "processed")): return "in_transit"
+        if "accepted" in s or "picked up" in s:                                 return "picked_up"
+        if "alert" in s or "exception" in s or "delay" in s:                   return "exception"
+        return "label_created"
+    return "unknown"
+
+
+def _fedex_token() -> Optional[str]:
+    cached = _CARRIER_TOKENS.get("fedex")
+    if cached and cached["expires_at"] > time.time():
+        return cached["token"]
+    cid, csec = os.environ.get("FEDEX_CLIENT_ID", ""), os.environ.get("FEDEX_CLIENT_SECRET", "")
+    if not cid or not csec:
+        return None
+    try:
+        r = requests.post("https://apis.fedex.com/oauth/token",
+            data={"grant_type": "client_credentials", "client_id": cid, "client_secret": csec},
+            headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=10)
+        r.raise_for_status()
+        d = r.json()
+        _CARRIER_TOKENS["fedex"] = {"token": d["access_token"],
+            "expires_at": time.time() + d.get("expires_in", 3600) - 60}
+        return d["access_token"]
+    except Exception as e:
+        print(f"[FEDEX] OAuth error: {e}")
+        return None
+
+
+def _ups_token() -> Optional[str]:
+    cached = _CARRIER_TOKENS.get("ups")
+    if cached and cached["expires_at"] > time.time():
+        return cached["token"]
+    cid, csec = os.environ.get("UPS_CLIENT_ID", ""), os.environ.get("UPS_CLIENT_SECRET", "")
+    if not cid or not csec:
+        return None
+    try:
+        r = requests.post("https://onlinetools.ups.com/security/v1/oauth/token",
+            data={"grant_type": "client_credentials"}, auth=(cid, csec),
+            headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=10)
+        r.raise_for_status()
+        d = r.json()
+        _CARRIER_TOKENS["ups"] = {"token": d["access_token"],
+            "expires_at": time.time() + d.get("expires_in", 14400) - 60}
+        return d["access_token"]
+    except Exception as e:
+        print(f"[UPS] OAuth error: {e}")
+        return None
+
+
+def _usps_token() -> Optional[str]:
+    cached = _CARRIER_TOKENS.get("usps")
+    if cached and cached["expires_at"] > time.time():
+        return cached["token"]
+    cid, csec = os.environ.get("USPS_CLIENT_ID", ""), os.environ.get("USPS_CLIENT_SECRET", "")
+    if not cid or not csec:
+        return None
+    try:
+        r = requests.post("https://api.usps.com/oauth2/v3/token",
+            json={"grant_type": "client_credentials", "client_id": cid, "client_secret": csec},
+            headers={"Content-Type": "application/json"}, timeout=10)
+        r.raise_for_status()
+        d = r.json()
+        _CARRIER_TOKENS["usps"] = {"token": d["access_token"],
+            "expires_at": time.time() + d.get("expires_in", 3600) - 60}
+        return d["access_token"]
+    except Exception as e:
+        print(f"[USPS] OAuth error: {e}")
+        return None
+
+
+def _track_fedex(tn: str) -> dict:
+    """Query FedEx Track API v1. Uses _TRACK_CACHE."""
+    cached = _TRACK_CACHE.get(tn)
+    if cached and (time.time() - cached["ts"]) < _TRACK_CACHE_TTL:
+        return cached["data"]
+    token = _fedex_token()
+    if not token:
+        return {"carrier": "fedex", "tracking_number": tn, "status": "no_credentials", "events": []}
+    try:
+        r = requests.post("https://apis.fedex.com/track/v1/trackingnumbers",
+            json={"trackingInfo": [{"trackingNumberInfo": {"trackingNumber": tn}}],
+                  "includeDetailedScans": True},
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json",
+                     "X-locale": "en_US"}, timeout=15)
+        r.raise_for_status()
+        d     = r.json()
+        track = d.get("output", {}).get("completeTrackResults", [{}])[0].get("trackResults", [{}])[0]
+        latest = track.get("latestStatusDetail", {})
+        loc    = latest.get("scanLocation", {})
+        events = [
+            {
+                "timestamp":   e.get("date", ""),
+                "status":      _norm_status("fedex", e.get("eventDescription", ""), e.get("eventType", "")),
+                "description": e.get("eventDescription", ""),
+                "location":    f"{e.get('scanLocation',{}).get('city','')}, "
+                               f"{e.get('scanLocation',{}).get('stateOrProvinceCode','')}".strip(", "),
+            }
+            for e in track.get("scanEvents", [])
+        ]
+        eta_w  = track.get("estimatedDeliveryTimeWindow", {}).get("window", {})
+        result = {
+            "carrier":          "fedex",
+            "tracking_number":  tn,
+            "status":           _norm_status("fedex", latest.get("description", ""), latest.get("code", "")),
+            "status_description": latest.get("description", ""),
+            "location":         f"{loc.get('city','')}, {loc.get('stateOrProvinceCode','')}".strip(", "),
+            "eta":              eta_w.get("ends", "") if eta_w else "",
+            "events":           events[:20],
+        }
+        _TRACK_CACHE[tn] = {"data": result, "ts": time.time()}
+        return result
+    except Exception as e:
+        print(f"[FEDEX] Track error: {e}")
+        return {"carrier": "fedex", "tracking_number": tn, "status": "error", "events": [], "error": str(e)}
+
+
+def _track_ups(tn: str) -> dict:
+    """Query UPS Track API v1. Uses _TRACK_CACHE."""
+    cached = _TRACK_CACHE.get(tn)
+    if cached and (time.time() - cached["ts"]) < _TRACK_CACHE_TTL:
+        return cached["data"]
+    token = _ups_token()
+    if not token:
+        return {"carrier": "ups", "tracking_number": tn, "status": "no_credentials", "events": []}
+    try:
+        r = requests.get(f"https://onlinetools.ups.com/api/track/v1/details/{tn}",
+            headers={"Authorization": f"Bearer {token}",
+                     "transId": f"ihe-{int(time.time())}", "transactionSrc": "IHE-Dashboard"},
+            timeout=15)
+        r.raise_for_status()
+        pkg    = r.json().get("trackResponse", {}).get("shipment", [{}])[0].get("package", [{}])[0]
+        acts   = pkg.get("activity", [])
+        latest = acts[0] if acts else {}
+        latest_desc = latest.get("status", {}).get("description", "")
+        events = [
+            {
+                "timestamp":   f"{a.get('date','')} {a.get('time','')}".strip(),
+                "status":      _norm_status("ups", a.get("status", {}).get("description", "")),
+                "description": a.get("status", {}).get("description", ""),
+                "location":    f"{a.get('location',{}).get('address',{}).get('city','')}, "
+                               f"{a.get('location',{}).get('address',{}).get('stateOrProvinceCode','')}".strip(", "),
+            }
+            for a in acts
+        ]
+        eta_entry = pkg.get("deliveryDate", [{}])[0] if pkg.get("deliveryDate") else {}
+        result = {
+            "carrier":            "ups",
+            "tracking_number":    tn,
+            "status":             _norm_status("ups", latest_desc),
+            "status_description": latest_desc,
+            "location":           events[0]["location"] if events else "",
+            "eta":                eta_entry.get("date", ""),
+            "events":             events[:20],
+        }
+        _TRACK_CACHE[tn] = {"data": result, "ts": time.time()}
+        return result
+    except Exception as e:
+        print(f"[UPS] Track error: {e}")
+        return {"carrier": "ups", "tracking_number": tn, "status": "error", "events": [], "error": str(e)}
+
+
+def _track_usps(tn: str) -> dict:
+    """Query USPS Track API v3. Uses _TRACK_CACHE."""
+    cached = _TRACK_CACHE.get(tn)
+    if cached and (time.time() - cached["ts"]) < _TRACK_CACHE_TTL:
+        return cached["data"]
+    token = _usps_token()
+    if not token:
+        return {"carrier": "usps", "tracking_number": tn, "status": "no_credentials", "events": []}
+    try:
+        r = requests.get(f"https://api.usps.com/tracking/v3/tracking/{tn}",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"expand": "DETAIL"}, timeout=15)
+        r.raise_for_status()
+        d      = r.json()
+        events = [
+            {
+                "timestamp":   ev.get("eventTimestamp", ""),
+                "status":      _norm_status("usps", ev.get("eventType", "")),
+                "description": ev.get("eventType", ""),
+                "location":    f"{ev.get('eventCity','')}, {ev.get('eventState','')} "
+                               f"{ev.get('eventZIPCode','')}".strip(", "),
+            }
+            for ev in d.get("trackingEvents", [])
+        ]
+        latest_desc = events[0]["description"] if events else d.get("statusCategory", "")
+        result = {
+            "carrier":            "usps",
+            "tracking_number":    tn,
+            "status":             _norm_status("usps", latest_desc),
+            "status_description": latest_desc,
+            "location":           events[0]["location"] if events else "",
+            "eta":                d.get("expectedDeliveryDate", ""),
+            "events":             events[:20],
+        }
+        _TRACK_CACHE[tn] = {"data": result, "ts": time.time()}
+        return result
+    except Exception as e:
+        print(f"[USPS] Track error: {e}")
+        return {"carrier": "usps", "tracking_number": tn, "status": "error", "events": [], "error": str(e)}
 
 # ─────────────────────────────────────────────────────────────
 # COGS TABLE  (loaded once at startup from cogs_data.json)
