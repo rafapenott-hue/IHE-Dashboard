@@ -205,9 +205,13 @@ def _track_ups(tn: str) -> dict:
     cached = _TRACK_CACHE.get(tn)
     if cached and (time.time() - cached["ts"]) < _TRACK_CACHE_TTL:
         return cached["data"]
+    cid = os.environ.get("UPS_CLIENT_ID", "")
+    csec = os.environ.get("UPS_CLIENT_SECRET", "")
+    if not cid or not csec:
+        return {"carrier": "ups", "tracking_number": tn, "status": "no_credentials", "events": []}
     token = _ups_token()
     if not token:
-        return {"carrier": "ups", "tracking_number": tn, "status": "no_credentials", "events": []}
+        return {"carrier": "ups", "tracking_number": tn, "status": "auth_error", "events": [], "error": "UPS OAuth token fetch failed — check UPS_CLIENT_ID/SECRET in Render"}
     try:
         r = requests.get(f"https://onlinetools.ups.com/api/track/v1/details/{tn}",
             headers={"Authorization": f"Bearer {token}",
