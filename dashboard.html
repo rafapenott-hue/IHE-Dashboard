@@ -1513,6 +1513,7 @@ function _statusBadge(status) {
 
 function _renderTrackingRows() {
   var orders = (typeof filteredOrders === "function" ? filteredOrders() : S.orders) || [];
+  console.log("[TRK] _renderTrackingRows: orders=", orders.length, "first=", orders[0]);
   var total = 0, nDelivered = 0, nTransit = 0, nPending = 0, nException = 0;
   var rows = [];
 
