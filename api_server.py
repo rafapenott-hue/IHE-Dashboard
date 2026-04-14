@@ -124,6 +124,7 @@ def _ups_token() -> Optional[str]:
         r = requests.post("https://onlinetools.ups.com/security/v1/oauth/token",
             data={"grant_type": "client_credentials"}, auth=(cid, csec),
             headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=10)
+        print(f"[UPS] OAuth status: {r.status_code} body: {r.text[:500]}")
         r.raise_for_status()
         d = r.json()
         _CARRIER_TOKENS["ups"] = {"token": d["access_token"],
