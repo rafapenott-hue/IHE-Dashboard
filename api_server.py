@@ -23,6 +23,7 @@ ENDPOINTS:
     GET /api/cogs                          → full COGS lookup table (JSON)
     GET /api/cogs/amazon/<asin>            → single ASIN lookup
     GET /api/cogs/shopify/<sku>            → single SKU lookup
+    GET /api/track?number=XXX             → carrier tracking lookup (FedEx/UPS/USPS)
 """
 
 import os
@@ -754,6 +755,28 @@ def get_shopify_cogs(sku):
                         "fallback_per_unit": fee_cfg()["cogs_per_unit"]}), 404
     return jsonify({"sku": sku, **rec})
 
+# ─────────────────────────────────────────────────────────────
+# CARRIER TRACKING ENDPOINT
+# ─────────────────────────────────────────────────────────────
+
+@app.route("/api/track")
+def get_tracking():
+    number = request.args.get("number", "").strip()
+    if not number:
+        return jsonify({"error": "number query param required"}), 400
+    carrier_hint = request.args.get("carrier", "")
+    carrier      = _detect_carrier(number, carrier_hint)
+    if carrier == "fedex":
+        return jsonify(_track_fedex(number))
+    if carrier == "ups":
+        return jsonify(_track_ups(number))
+    if carrier == "usps":
+        return jsonify(_track_usps(number))
+    return jsonify({
+        "carrier": "unknown", "tracking_number": number,
+        "status": "unknown_carrier", "events": [],
+        "error": f"Cannot detect carrier for {number}",
+    })
 
 # ─────────────────────────────────────────────────────────────
 # DASHBOARD  (serves dashboard.html at the root URL)
