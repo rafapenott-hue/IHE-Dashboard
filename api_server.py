@@ -803,6 +803,28 @@ def dashboard():
 
 
 # ─────────────────────────────────────────────────────────────
+# CONFIG  (used by dashboard auto-detect in init())
+# ─────────────────────────────────────────────────────────────
+
+@app.route("/api/config")
+def get_config():
+    return jsonify({
+        "shopify_configured":   bool(os.environ.get("SHOPIFY_STORE")),
+        "shopify_store":        os.environ.get("SHOPIFY_STORE", ""),
+        "amazon_configured":    bool(os.environ.get("AMAZON_CLIENT_ID")),
+        "amazon_marketplace":   os.environ.get("AMAZON_MARKETPLACE_ID", "ATVPDKIKX0DER"),
+        "amazon_region":        os.environ.get("AMAZON_REGION", "us-east-1"),
+        "fees": {
+            "amazon_fee":   float(os.environ.get("AMAZON_FEE_PCT", 15)),
+            "shopify_fee":  float(os.environ.get("SHOPIFY_FEE_PCT", 2)),
+            "stripe_pct":   float(os.environ.get("STRIPE_FEE_PCT", 2.9)),
+            "stripe_fixed": float(os.environ.get("STRIPE_FIXED_FEE", 0.30)),
+            "cogs_per_unit": float(os.environ.get("COGS_PER_UNIT", 18)),
+        },
+    })
+
+
+# ─────────────────────────────────────────────────────────────
 # HEALTH
 # ─────────────────────────────────────────────────────────────
 
