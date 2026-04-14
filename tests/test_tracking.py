@@ -193,3 +193,39 @@ def test_api_track_missing_number():
     client = api_server.app.test_client()
     resp = client.get("/api/track")
     assert resp.status_code == 400
+
+
+# ── Shopify tracking extraction ────────────────────────────────
+
+def test_normalize_shopify_order_extracts_tracking():
+    from api_server import normalize_shopify_order
+    raw = {
+        "id": 1, "order_number": 1042,
+        "created_at": "2026-04-13T10:00:00Z",
+        "total_price": "89.00", "financial_status": "paid",
+        "billing_address": {"first_name": "Jane", "last_name": "Doe"},
+        "line_items": [{"sku": "HAM-001", "quantity": 1, "price": "89.00",
+                         "name": "Iberian Ham", "title": "Iberian Ham"}],
+        "fulfillments": [{"tracking_number": "794644823401",
+                          "tracking_company": "FedEx",
+                          "status": "success"}],
+    }
+    fees = {"amazon_fee": 15, "shopify_fee": 2, "stripe_pct": 2.9,
+            "stripe_fixed": 0.30, "cogs_per_unit": 18}
+    order = normalize_shopify_order(raw, fees)
+    assert order["tracking_number"] == "794644823401"
+    assert order["carrier"] == "FedEx"
+
+def test_normalize_shopify_order_no_fulfillment():
+    from api_server import normalize_shopify_order
+    raw = {
+        "id": 2, "order_number": 1043,
+        "created_at": "2026-04-13T10:00:00Z",
+        "total_price": "50.00", "financial_status": "paid",
+        "billing_address": {}, "line_items": [], "fulfillments": [],
+    }
+    fees = {"amazon_fee": 15, "shopify_fee": 2, "stripe_pct": 2.9,
+            "stripe_fixed": 0.30, "cogs_per_unit": 18}
+    order = normalize_shopify_order(raw, fees)
+    assert order["tracking_number"] is None
+    assert order["carrier"] is None

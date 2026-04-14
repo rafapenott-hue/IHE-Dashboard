@@ -359,7 +359,7 @@ def shopify_fetch(store: str, token: str, created_at_min: str) -> list:
         "limit":           250,
         # include line_items so we can do per-SKU COGS
         "fields": "id,order_number,created_at,total_price,financial_status,"
-                  "billing_address,line_items",
+                  "billing_address,line_items,fulfillments",
     }
     orders = []
     while True:
@@ -396,8 +396,11 @@ def normalize_shopify_order(o: dict, fees: dict) -> dict:
     stripe_fee   = gross * (fees["stripe_pct"] / 100) + fees["stripe_fixed"]
     total_fees   = platform_fee + stripe_fee + cogs
 
-    bill = o.get("billing_address") or {}
-    name = f"{bill.get('first_name','')} {bill.get('last_name','')}".strip() or "Customer"
+    bill         = o.get("billing_address") or {}
+    name         = f"{bill.get('first_name','')} {bill.get('last_name','')}".strip() or "Customer"
+    fulfillments = o.get("fulfillments", [])
+    tracking_num = fulfillments[0].get("tracking_number") if fulfillments else None
+    carrier_name = fulfillments[0].get("tracking_company") if fulfillments else None
 
     return {
         "id":           f"SH-{o.get('order_number', o.get('id', ''))}",
@@ -411,8 +414,10 @@ def normalize_shopify_order(o: dict, fees: dict) -> dict:
         "stripe_fee":   round(stripe_fee, 2),
         "cogs":         round(cogs, 2),
         "total_fees":   round(total_fees, 2),
-        "net":          round(gross - total_fees, 2),
-        "line_items":   [
+        "net":             round(gross - total_fees, 2),
+        "tracking_number": tracking_num,
+        "carrier":         carrier_name,
+        "line_items":      [
             {
                 "sku":        li.get("sku", ""),
                 "title":      li.get("name", li.get("title", "")),
