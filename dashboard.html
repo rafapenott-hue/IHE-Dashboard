@@ -527,14 +527,17 @@ async function init
 .nav-tab{padding:6px 16px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;font-size:.875rem;font-weight:500;transition:all .2s}
 .nav-tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}
 .nav-tab:hover:not(.active){background:var(--card-bg);color:var(--text)}
-.tracking-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
-.track-card{background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:20px;text-align:center}
-.track-card .label{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.tracking-cards{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px}
+.track-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center}
+.track-card .label{font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
 .track-card .value{font-size:1.75rem;font-weight:700;color:var(--text)}
-.track-card.shipped .value{color:#22c55e}
-.track-card.unshipped .value{color:#f59e0b}
-.track-card.overdue .value{color:#ef4444}
-.track-filters{display:flex;gap:8px;margin-bottom:16px}
+.track-card.delivered .value{color:var(--success)}
+.track-card.transit .value{color:var(--accent)}
+.track-card.pending-trk .value{color:var(--warning)}
+.track-card.exception .value{color:var(--danger)}
+.plat-shopify{color:var(--shopify)}
+.plat-amazon{color:var(--amazon)}
+.track-filters{display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap}
 .track-filter{padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;font-size:.8rem}
 .track-filter.active{background:var(--accent);color:#fff;border-color:var(--accent)}
 .status-badge{display:inline-block;padding:2px 10px;border-radius:99px;font-size:.75rem;font-weight:600}
@@ -782,21 +785,27 @@ async function init
 
 <div id="page-tracking" style="display:none">
   <div class="tracking-cards">
-    <div class="track-card"><div class="label">Total Orders</div><div class="value" id="trk-total">0</div></div>
-    <div class="track-card shipped"><div class="label">Shipped</div><div class="value" id="trk-shipped">0</div></div>
-    <div class="track-card unshipped"><div class="label">Unshipped</div><div class="value" id="trk-unshipped">0</div></div>
-    <div class="track-card overdue"><div class="label">Overdue (&gt;48h)</div><div class="value" id="trk-overdue">0</div></div>
+    <div class="track-card"><div class="label">Total</div><div class="value" id="trk-total">0</div></div>
+    <div class="track-card delivered"><div class="label">Delivered</div><div class="value" id="trk-delivered">0</div></div>
+    <div class="track-card transit"><div class="label">In Transit</div><div class="value" id="trk-transit">0</div></div>
+    <div class="track-card pending-trk"><div class="label">Pending</div><div class="value" id="trk-pending">0</div></div>
+    <div class="track-card exception"><div class="label">Exception</div><div class="value" id="trk-exception">0</div></div>
   </div>
   <div class="track-filters">
-    <button class="track-filter active" onclick="filterTracking('all')">All</button>
-    <button class="track-filter" onclick="filterTracking('fulfilled')">Shipped</button>
-    <button class="track-filter" onclick="filterTracking('unfulfilled')">Unshipped</button>
-    <button class="track-filter" onclick="filterTracking('overdue')">Overdue</button>
+    <button class="track-filter active" data-filter="all" onclick="filterTracking('all')">All</button>
+    <button class="track-filter" data-filter="delivered" onclick="filterTracking('delivered')">Delivered</button>
+    <button class="track-filter" data-filter="in_transit" onclick="filterTracking('in_transit')">In Transit</button>
+    <button class="track-filter" data-filter="pending" onclick="filterTracking('pending')">Pending</button>
+    <button class="track-filter" data-filter="exception" onclick="filterTracking('exception')">Exception</button>
+    <span style="margin-left:auto;display:flex;align-items:center;gap:8px">
+      <span id="trk-updated" style="font-size:11px;color:var(--text-3)"></span>
+      <button class="btn" onclick="refreshTracking()">↻ Refresh</button>
+    </span>
   </div>
   <div class="tbl-wrap">
     <table class="tbl" id="tracking-table">
       <thead><tr>
-        <th>Date</th><th>Order</th><th>Platform</th><th>Customer</th><th>Gross</th><th>Status</th><th>Days</th>
+        <th>Date</th><th>Order</th><th>Platform</th><th>Carrier</th><th>Carrier Status</th><th>Est. Delivery</th><th>Days</th>
       </tr></thead>
       <tbody id="tracking-body"></tbody>
     </table>
@@ -1442,6 +1451,9 @@ async function init() {
 init();
 
 // === TRACKING TAB ===
+const _TRACK_TTL_MS = 30 * 60 * 1000;
+let _trackCache = {};      // { tracking_number: { data, ts } }
+let _trackLastFetch = null;
 let trackingFilter = "all";
 
 function switchPage(page) {
@@ -1462,48 +1474,136 @@ function daysSince(dateStr) {
 function filterTracking(f) {
   trackingFilter = f;
   document.querySelectorAll(".track-filter").forEach(function(b) {
-    var t = b.textContent.toLowerCase();
-    b.classList.toggle("active", (f==="all" && t==="all") || (f==="fulfilled" && t==="shipped") || (f==="unfulfilled" && t==="unshipped") || (f==="overdue" && t==="overdue"));
+    b.classList.toggle("active", b.dataset.filter === f);
   });
+  _renderTrackingRows();
+}
+
+function refreshTracking() {
+  _trackCache = {};
+  _trackLastFetch = null;
   renderTracking();
 }
-function renderTracking() {
-  var orders = filteredOrders() || [];
-  var total = 0, shipped = 0, unshipped = 0, overdue = 0;
+
+function _liveStatus(order) {
+  if (!order.tracking_number) return "no_tracking";
+  var entry = _trackCache[order.tracking_number];
+  if (!entry) return "loading";
+  return entry.data.status || "unknown";
+}
+
+function _statusBadge(status) {
+  var map = {
+    "delivered":       { text: "Delivered",        cls: "delivered" },
+    "out_for_delivery":{ text: "Out for Delivery",  cls: "out_for_delivery" },
+    "in_transit":      { text: "In Transit",        cls: "in_transit" },
+    "picked_up":       { text: "Picked Up",         cls: "in_transit" },
+    "pending":         { text: "Pending",           cls: "pending-trk" },
+    "label_created":   { text: "Label Created",     cls: "pending-trk" },
+    "exception":       { text: "Exception",         cls: "exception" },
+    "loading":         { text: "…",                 cls: "pending-trk" },
+    "no_tracking":     { text: "—",                 cls: "no-tracking" },
+    "unknown_carrier": { text: "Unknown",           cls: "no-tracking" },
+    "unknown":         { text: "Unknown",           cls: "no-tracking" },
+  };
+  return map[status] || { text: status, cls: "no-tracking" };
+}
+
+function _renderTrackingRows() {
+  var orders = (typeof filteredOrders === "function" ? filteredOrders() : S.orders) || [];
+  var total = 0, nDelivered = 0, nTransit = 0, nPending = 0, nException = 0;
   var rows = [];
+
   orders.forEach(function(o) {
-    var fs = (o.fulfillment_status || "unfulfilled").toLowerCase();
-    var days = daysSince(o.date);
-    var isShipped = fs === "fulfilled";
-    var isOverdue = !isShipped && days > 2;
     total++;
-    if (isShipped) shipped++;
-    else if (isOverdue) { overdue++; unshipped++; }
-    else unshipped++;
-    var status = isShipped ? "fulfilled" : isOverdue ? "overdue" : "pending";
-    if (trackingFilter === "all" || trackingFilter === status || (trackingFilter === "unfulfilled" && (status === "pending" || status === "overdue"))) {
-      rows.push({o: o, status: status, days: days, isShipped: isShipped});
+    var liveStatus = _liveStatus(o);
+    var bucket;
+    if (liveStatus === "delivered") bucket = "delivered";
+    else if (liveStatus === "in_transit" || liveStatus === "out_for_delivery" || liveStatus === "picked_up") bucket = "in_transit";
+    else if (liveStatus === "exception") bucket = "exception";
+    else bucket = "pending";
+
+    if (liveStatus !== "no_tracking" && liveStatus !== "loading" && liveStatus !== "unknown" && liveStatus !== "unknown_carrier") {
+      if (bucket === "delivered") nDelivered++;
+      else if (bucket === "in_transit") nTransit++;
+      else if (bucket === "exception") nException++;
+      else nPending++;
     }
+
+    var show = trackingFilter === "all" || trackingFilter === bucket ||
+               (trackingFilter === "in_transit" && (liveStatus === "out_for_delivery" || liveStatus === "picked_up"));
+    if (show) rows.push({ o: o, liveStatus: liveStatus, bucket: bucket });
   });
-  document.getElementById("trk-total").textContent = total;
-  document.getElementById("trk-shipped").textContent = shipped;
-  document.getElementById("trk-unshipped").textContent = unshipped;
-  document.getElementById("trk-overdue").textContent = overdue;
+
+  document.getElementById("trk-total").textContent     = total;
+  document.getElementById("trk-delivered").textContent = nDelivered;
+  document.getElementById("trk-transit").textContent   = nTransit;
+  document.getElementById("trk-pending").textContent   = nPending;
+  document.getElementById("trk-exception").textContent = nException;
+
+  if (_trackLastFetch) {
+    var minsAgo = Math.floor((Date.now() - _trackLastFetch) / 60000);
+    document.getElementById("trk-updated").textContent = minsAgo < 1 ? "Updated just now" : "Updated " + minsAgo + " min ago";
+  } else {
+    document.getElementById("trk-updated").textContent = "";
+  }
+
   var body = document.getElementById("tracking-body");
   body.innerHTML = "";
   rows.forEach(function(r) {
+    var badge   = _statusBadge(r.liveStatus);
+    var carrierEntry = r.o.tracking_number ? _trackCache[r.o.tracking_number] : null;
+    var carrierName  = (carrierEntry && carrierEntry.data.carrier) ? carrierEntry.data.carrier.toUpperCase() : (r.o.carrier || "");
+    var estDelivery  = (carrierEntry && carrierEntry.data.estimated_delivery) ? carrierEntry.data.estimated_delivery.slice(0,10) : "—";
+    var platCls      = r.o.platform === "Shopify" ? "plat-shopify" : r.o.platform === "Amazon" ? "plat-amazon" : "";
+    var days         = daysSince(r.o.date);
     var tr = document.createElement("tr");
-    var badgeClass = r.status;
-    var badgeText = r.isShipped ? "Shipped" : r.status === "overdue" ? "Overdue" : "Pending";
-    tr.innerHTML = "<td>" + r.o.date.toISOString().slice(0,10) + "</td>" +
+    tr.innerHTML =
+      "<td>" + (r.o.date instanceof Date ? r.o.date.toISOString().slice(0,10) : String(r.o.date).slice(0,10)) + "</td>" +
       "<td>#" + r.o.id + "</td>" +
-      "<td>" + r.o.platform + "</td>" +
-      "<td>" + (r.o.customer || "N/A") + "</td>" +
-      "<td>" + fmt(r.o.gross) + "</td>" +
-      "<td><span class=\"status-badge " + badgeClass + "\">" + badgeText + "</span></td>" +
-      "<td>" + r.days + "d</td>";
+      "<td><span class=\"" + platCls + "\">" + r.o.platform + "</span></td>" +
+      "<td>" + (carrierName || "—") + "</td>" +
+      "<td><span class=\"status-badge " + badge.cls + "\">" + badge.text + "</span></td>" +
+      "<td>" + estDelivery + "</td>" +
+      "<td>" + days + "d</td>";
     body.appendChild(tr);
   });
+}
+
+async function renderTracking() {
+  _renderTrackingRows();
+
+  var orders = (typeof filteredOrders === "function" ? filteredOrders() : S.orders) || [];
+  var now = Date.now();
+  var toFetch = [];
+  orders.forEach(function(o) {
+    if (!o.tracking_number) return;
+    var entry = _trackCache[o.tracking_number];
+    if (!entry || (now - entry.ts) > _TRACK_TTL_MS) {
+      if (!toFetch.includes(o.tracking_number)) toFetch.push(o.tracking_number);
+    }
+  });
+
+  if (toFetch.length === 0) return;
+
+  var carrier_hints = {};
+  orders.forEach(function(o) {
+    if (o.tracking_number && o.carrier) carrier_hints[o.tracking_number] = o.carrier;
+  });
+
+  await Promise.all(toFetch.map(async function(tn) {
+    try {
+      var hint  = carrier_hints[tn] ? "&carrier=" + encodeURIComponent(carrier_hints[tn]) : "";
+      var resp  = await fetch("/api/track?number=" + encodeURIComponent(tn) + hint);
+      var data  = await resp.json();
+      _trackCache[tn] = { data: data, ts: Date.now() };
+    } catch(e) {
+      _trackCache[tn] = { data: { status: "exception", error: String(e) }, ts: Date.now() };
+    }
+  }));
+
+  _trackLastFetch = Date.now();
+  _renderTrackingRows();
 }
 </script>
 </body>
