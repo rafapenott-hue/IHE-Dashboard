@@ -1513,7 +1513,8 @@ function _statusBadge(status) {
 
 function _renderTrackingRows() {
   var orders = (typeof filteredOrders === "function" ? filteredOrders() : S.orders) || [];
-  console.log("[TRK] _renderTrackingRows: orders=", orders.length, "sample tracking_number=", orders[0] && orders[0].tracking_number);
+  var withTrk = orders.filter(function(o){ return o.tracking_number; }).length;
+  console.log("[TRK] orders=", orders.length, "with tracking_number=", withTrk, "first tn=", orders[0] && orders[0].tracking_number);
   var total = 0, nDelivered = 0, nTransit = 0, nPending = 0, nException = 0;
   var rows = [];
 
