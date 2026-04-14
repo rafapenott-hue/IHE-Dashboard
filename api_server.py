@@ -178,8 +178,7 @@ def _track_fedex(tn: str) -> dict:
                 "timestamp":   e.get("date", ""),
                 "status":      _norm_status("fedex", e.get("eventDescription", ""), e.get("eventType", "")),
                 "description": e.get("eventDescription", ""),
-                "location":    f"{e.get('scanLocation',{}).get('city','')}, "
-                               f"{e.get('scanLocation',{}).get('stateOrProvinceCode','')}".strip(", "),
+                "location":    ", ".join(p for p in [e.get('scanLocation',{}).get('city',''), e.get('scanLocation',{}).get('stateOrProvinceCode','')] if p),
             }
             for e in track.get("scanEvents", [])
         ]
@@ -189,7 +188,7 @@ def _track_fedex(tn: str) -> dict:
             "tracking_number":  tn,
             "status":           _norm_status("fedex", latest.get("description", ""), latest.get("code", "")),
             "status_description": latest.get("description", ""),
-            "location":         f"{loc.get('city','')}, {loc.get('stateOrProvinceCode','')}".strip(", "),
+            "location":         ", ".join(p for p in [loc.get('city',''), loc.get('stateOrProvinceCode','')] if p),
             "eta":              eta_w.get("ends", "") if eta_w else "",
             "events":           events[:20],
         }
@@ -223,8 +222,7 @@ def _track_ups(tn: str) -> dict:
                 "timestamp":   f"{a.get('date','')} {a.get('time','')}".strip(),
                 "status":      _norm_status("ups", a.get("status", {}).get("description", "")),
                 "description": a.get("status", {}).get("description", ""),
-                "location":    f"{a.get('location',{}).get('address',{}).get('city','')}, "
-                               f"{a.get('location',{}).get('address',{}).get('stateOrProvinceCode','')}".strip(", "),
+                "location":    ", ".join(p for p in [a.get('location',{}).get('address',{}).get('city',''), a.get('location',{}).get('address',{}).get('stateOrProvinceCode','')] if p),
             }
             for a in acts
         ]
@@ -264,8 +262,7 @@ def _track_usps(tn: str) -> dict:
                 "timestamp":   ev.get("eventTimestamp", ""),
                 "status":      _norm_status("usps", ev.get("eventType", "")),
                 "description": ev.get("eventType", ""),
-                "location":    f"{ev.get('eventCity','')}, {ev.get('eventState','')} "
-                               f"{ev.get('eventZIPCode','')}".strip(", "),
+                "location":    ", ".join(p for p in [ev.get('eventCity',''), ev.get('eventState',''), ev.get('eventZIPCode','')] if p),
             }
             for ev in d.get("trackingEvents", [])
         ]

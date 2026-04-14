@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from unittest.mock import patch, MagicMock
@@ -76,6 +76,16 @@ def test_track_fedex_no_token():
         result = _track_fedex("794644823401")
     assert result["status"] == "no_credentials"
 
+def test_track_fedex_cache_hit():
+    cached_data = {"carrier": "fedex", "tracking_number": "794644823401",
+                   "status": "delivered", "events": []}
+    with patch.dict(api_server._TRACK_CACHE,
+                    {"794644823401": {"data": cached_data, "ts": time.time()}}), \
+         patch("api_server._fedex_token") as mock_token:
+        result = _track_fedex("794644823401")
+    assert result["status"] == "delivered"
+    mock_token.assert_not_called()  # no HTTP call made
+
 def test_track_fedex_api_error():
     with patch("api_server._fedex_token", return_value="tok"), \
          patch("api_server.requests.post", side_effect=Exception("timeout")), \
@@ -116,6 +126,16 @@ def test_track_ups_no_token():
         result = _track_ups("1Z999AA10123456784")
     assert result["status"] == "no_credentials"
 
+def test_track_ups_cache_hit():
+    cached_data = {"carrier": "ups", "tracking_number": "1Z999AA10123456784",
+                   "status": "in_transit", "events": []}
+    with patch.dict(api_server._TRACK_CACHE,
+                    {"1Z999AA10123456784": {"data": cached_data, "ts": time.time()}}), \
+         patch("api_server._ups_token") as mock_token:
+        result = _track_ups("1Z999AA10123456784")
+    assert result["status"] == "in_transit"
+    mock_token.assert_not_called()
+
 
 # ── _track_usps ────────────────────────────────────────────────
 
@@ -145,6 +165,16 @@ def test_track_usps_no_token():
     with patch("api_server._usps_token", return_value=None):
         result = _track_usps("9400111899223397846233")
     assert result["status"] == "no_credentials"
+
+def test_track_usps_cache_hit():
+    cached_data = {"carrier": "usps", "tracking_number": "9400111899223397846233",
+                   "status": "delivered", "events": []}
+    with patch.dict(api_server._TRACK_CACHE,
+                    {"9400111899223397846233": {"data": cached_data, "ts": time.time()}}), \
+         patch("api_server._usps_token") as mock_token:
+        result = _track_usps("9400111899223397846233")
+    assert result["status"] == "delivered"
+    mock_token.assert_not_called()
 
 
 # ── /api/track endpoint ────────────────────────────────────────
