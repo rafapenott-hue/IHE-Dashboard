@@ -1392,6 +1392,7 @@ async function fetchLiveData(proxy) {
         id:o.id, platform:'shopify', date:new Date(o.created_at),
         gross:o.gross, units:o.units, customer:o.customer, status:o.status,
         fulfillment_status:o.fulfillment_status||"unfulfilled",
+        tracking_number:o.tracking_number||null, carrier:o.carrier||null,
         _platformFee:o.platform_fee, _stripeFee:o.stripe_fee,
         _cogs:o.cogs, _shipping:o.shipping||0, _net:o.net, _cogsMethod:'per_sku', _lineItems:o.line_items||[]
       })),
@@ -1399,6 +1400,7 @@ async function fetchLiveData(proxy) {
         id:o.id, platform:'amazon', date:new Date(o.created_at),
         gross:o.gross, units:o.units, customer:'Amazon Customer', status:o.status,
         fulfillment_status:o.fulfillment_status||"unfulfilled",
+        tracking_number:null, carrier:null,
         _platformFee:o.platform_fee, _stripeFee:0,
         _cogs:o.cogs, _shipping:o.shipping||0, _net:o.net, _cogsMethod:o.cogs_method||'weighted_ratio', _lineItems:o.line_items||[]
       }))
@@ -1555,13 +1557,14 @@ function _renderTrackingRows() {
     var carrierEntry = r.o.tracking_number ? _trackCache[r.o.tracking_number] : null;
     var carrierName  = (carrierEntry && carrierEntry.data.carrier) ? carrierEntry.data.carrier.toUpperCase() : (r.o.carrier || "");
     var estDelivery  = (carrierEntry && carrierEntry.data.estimated_delivery) ? carrierEntry.data.estimated_delivery.slice(0,10) : "—";
-    var platCls      = r.o.platform === "Shopify" ? "plat-shopify" : r.o.platform === "Amazon" ? "plat-amazon" : "";
+    var platCls      = r.o.platform === "shopify" ? "plat-shopify" : r.o.platform === "amazon" ? "plat-amazon" : "";
+    var platLabel    = r.o.platform === "shopify" ? "Shopify" : r.o.platform === "amazon" ? "Amazon" : r.o.platform;
     var days         = daysSince(r.o.date);
     var tr = document.createElement("tr");
     tr.innerHTML =
       "<td>" + (r.o.date instanceof Date ? r.o.date.toISOString().slice(0,10) : String(r.o.date).slice(0,10)) + "</td>" +
       "<td>#" + r.o.id + "</td>" +
-      "<td><span class=\"" + platCls + "\">" + r.o.platform + "</span></td>" +
+      "<td><span class=\"" + platCls + "\">" + platLabel + "</span></td>" +
       "<td>" + (carrierName || "—") + "</td>" +
       "<td><span class=\"status-badge " + badge.cls + "\">" + badge.text + "</span></td>" +
       "<td>" + estDelivery + "</td>" +
