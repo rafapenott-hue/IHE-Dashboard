@@ -106,7 +106,7 @@ def _fedex_token() -> Optional[str]:
         r.raise_for_status()
         d = r.json()
         _CARRIER_TOKENS["fedex"] = {"token": d["access_token"],
-            "expires_at": time.time() + d.get("expires_in", 3600) - 60}
+            "expires_at": time.time() + int(d.get("expires_in", 3600)) - 60}
         return d["access_token"]
     except Exception as e:
         print(f"[FEDEX] OAuth error: {e}")
@@ -128,7 +128,7 @@ def _ups_token() -> Optional[str]:
         r.raise_for_status()
         d = r.json()
         _CARRIER_TOKENS["ups"] = {"token": d["access_token"],
-            "expires_at": time.time() + d.get("expires_in", 14400) - 60}
+            "expires_at": time.time() + int(d.get("expires_in", 14400)) - 60}
         return d["access_token"]
     except Exception as e:
         print(f"[UPS] OAuth error: {e}")
@@ -149,7 +149,7 @@ def _usps_token() -> Optional[str]:
         r.raise_for_status()
         d = r.json()
         _CARRIER_TOKENS["usps"] = {"token": d["access_token"],
-            "expires_at": time.time() + d.get("expires_in", 3600) - 60}
+            "expires_at": time.time() + int(d.get("expires_in", 3600)) - 60}
         return d["access_token"]
     except Exception as e:
         print(f"[USPS] OAuth error: {e}")
