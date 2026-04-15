@@ -171,10 +171,11 @@ def _track_fedex(tn: str) -> dict:
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json",
                      "X-locale": "en_US"}, timeout=15)
         r.raise_for_status()
-        d     = r.json()
-        track = d.get("output", {}).get("completeTrackResults", [{}])[0].get("trackResults", [{}])[0]
-        latest = track.get("latestStatusDetail", {})
-        loc    = latest.get("scanLocation", {})
+        d           = r.json()
+        track       = d.get("output", {}).get("completeTrackResults", [{}])[0].get("trackResults", [{}])[0]
+        latest      = track.get("latestStatusDetail", {})
+        loc         = latest.get("scanLocation", {})
+        service_raw = track.get("serviceDetail", {}).get("description", "") or None
         events = [
             {
                 "timestamp":   e.get("date", ""),
@@ -184,15 +185,18 @@ def _track_fedex(tn: str) -> dict:
             }
             for e in track.get("scanEvents", [])
         ]
-        eta_w  = track.get("estimatedDeliveryTimeWindow", {}).get("window", {})
+        eta_w        = track.get("estimatedDeliveryTimeWindow", {}).get("window", {})
+        eta_raw      = eta_w.get("ends", "") if eta_w else ""   # "2026-04-14T00:00:00"
+        est_delivery = eta_raw[:10] if eta_raw else None        # slice to "2026-04-14"
         result = {
-            "carrier":          "fedex",
-            "tracking_number":  tn,
-            "status":           _norm_status("fedex", latest.get("description", ""), latest.get("code", "")),
+            "carrier":            "fedex",
+            "tracking_number":    tn,
+            "status":             _norm_status("fedex", latest.get("description", ""), latest.get("code", "")),
             "status_description": latest.get("description", ""),
-            "location":         ", ".join(p for p in [loc.get('city',''), loc.get('stateOrProvinceCode','')] if p),
-            "eta":              eta_w.get("ends", "") if eta_w else "",
-            "events":           events[:20],
+            "service":            service_raw,
+            "latest_location":    ", ".join(p for p in [loc.get('city',''), loc.get('stateOrProvinceCode','')] if p),
+            "estimated_delivery": est_delivery,
+            "events":             events[:20],
         }
         _TRACK_CACHE[tn] = {"data": result, "ts": time.time()}
         return result
