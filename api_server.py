@@ -277,18 +277,21 @@ def _track_usps(tn: str) -> dict:
                 "timestamp":   ev.get("eventTimestamp", ""),
                 "status":      _norm_status("usps", ev.get("eventType", "")),
                 "description": ev.get("eventType", ""),
-                "location":    ", ".join(p for p in [ev.get('eventCity',''), ev.get('eventState',''), ev.get('eventZIPCode','')] if p),
+                "location":    ", ".join(p for p in [ev.get('eventCity',''), ev.get('eventState','')] if p),
             }
             for ev in d.get("trackingEvents", [])
         ]
-        latest_desc = events[0]["description"] if events else d.get("statusCategory", "")
+        latest_desc  = events[0]["description"] if events else d.get("statusCategory", "")
+        service_raw  = d.get("mailClass", "") or None
+        est_delivery = d.get("expectedDeliveryDate", "") or None   # already "YYYY-MM-DD"
         result = {
             "carrier":            "usps",
             "tracking_number":    tn,
             "status":             _norm_status("usps", latest_desc),
             "status_description": latest_desc,
-            "location":           events[0]["location"] if events else "",
-            "eta":                d.get("expectedDeliveryDate", ""),
+            "service":            service_raw,
+            "latest_location":    events[0]["location"] if events else "",
+            "estimated_delivery": est_delivery,
             "events":             events[:20],
         }
         _TRACK_CACHE[tn] = {"data": result, "ts": time.time()}
