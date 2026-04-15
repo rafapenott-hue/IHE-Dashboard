@@ -34,6 +34,7 @@
       --t:            .18s ease;
       --font-display: 'Playfair Display', Georgia, serif;
       --font-mono:    'IBM Plex Mono', 'SF Mono', monospace;
+      --info:         #7a9cbf;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -45,6 +46,19 @@
       min-height: 100vh;
       font-size: 14px;
       line-height: 1.5;
+    }
+
+    /* ── GRAIN TEXTURE ─────────────────────────────────────── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 9999;
+      opacity: 0.028;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      background-repeat: repeat;
+      background-size: 256px 256px;
     }
 
     /* ── SCROLLBAR ─────────────────────────────────────── */
@@ -260,22 +274,37 @@
     /* ── KPI GRID ──────────────────────────────────────── */
     .kpi-grid {
       display: grid;
-      grid-template-columns: repeat(6, 1fr);
+      grid-template-columns: repeat(7, 1fr);
       gap: 12px;
       margin-bottom: 16px;
     }
-    @media (max-width: 1100px) { .kpi-grid { grid-template-columns: repeat(3,1fr); } }
+    @media (max-width: 1200px) { .kpi-grid { grid-template-columns: repeat(4,1fr); } }
     @media (max-width: 640px)  { .kpi-grid { grid-template-columns: repeat(2,1fr); } }
+
+    @keyframes kpiReveal {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
 
     .kpi {
       background: var(--card);
       border: 1px solid var(--border);
+      border-left: 2px solid var(--border);
       border-radius: var(--radius);
       padding: 18px 16px 14px;
-      transition: border-color var(--t), box-shadow var(--t);
+      transition: border-color var(--t), border-left-color var(--t), box-shadow var(--t);
+      animation: kpiReveal 0.45s ease both;
     }
+    .kpi:nth-child(1) { animation-delay: .04s; }
+    .kpi:nth-child(2) { animation-delay: .08s; }
+    .kpi:nth-child(3) { animation-delay: .12s; }
+    .kpi:nth-child(4) { animation-delay: .16s; }
+    .kpi:nth-child(5) { animation-delay: .20s; }
+    .kpi:nth-child(6) { animation-delay: .24s; }
+    .kpi:nth-child(7) { animation-delay: .28s; }
     .kpi:hover {
       border-color: var(--text-3);
+      border-left-color: var(--accent);
       box-shadow: 0 4px 16px rgba(0,0,0,.25);
     }
     .kpi-label {
@@ -311,11 +340,12 @@
     .card {
       background: var(--card);
       border: 1px solid var(--border);
+      border-left: 2px solid var(--border);
       border-radius: var(--radius);
       overflow: hidden;
-      transition: border-color var(--t), box-shadow var(--t);
+      transition: border-color var(--t), border-left-color var(--t), box-shadow var(--t);
     }
-    .card:hover { box-shadow: 0 4px 20px rgba(0,0,0,.3); }
+    .card:hover { border-left-color: var(--accent); box-shadow: 0 4px 20px rgba(0,0,0,.3); }
     .card-hdr {
       padding: 13px 18px;
       border-bottom: 1px solid var(--border-sub);
@@ -809,9 +839,11 @@
           <div class="wf-track"><div class="wf-bar b-cogs" id="wf-cogs-bar" style="width:0%"></div></div>
         </div>
         <div class="wf-row">
-          <span class="wf-label">Shipping</span>
-          <div class="wf-bar-wrap"><div class="wf-bar b-ship" id="wf-ship-bar" style="width:0%"></div></div>
-          <span class="wf-val" id="wf-ship-val">-</span>
+          <div class="wf-meta">
+            <span class="wf-label">Shipping</span>
+            <span class="wf-val warn-text" id="wf-ship-val"></span>
+          </div>
+          <div class="wf-track"><div class="wf-bar b-ship" id="wf-ship-bar" style="width:0%"></div></div>
         </div>
         <div class="wf-row wf-net-row">
           <div class="wf-meta">
@@ -1152,9 +1184,9 @@ function updateFeeBar() {
 // ── CHARTS ───────────────────────────────────────────────────
 const charts = {};
 const CC = {
-  grid:   'rgba(255,255,255,.04)',
-  tick:   '#52525b',
-  legend: '#a1a1aa',
+  grid:   'rgba(242,236,228,.04)',
+  tick:   '#6b5f57',
+  legend: '#b5a496',
 };
 
 function renderOrdersChart(orders) {
