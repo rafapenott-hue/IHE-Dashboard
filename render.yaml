@@ -34,6 +34,8 @@ services:
         value: "0.30"
       - key: COGS_PER_UNIT
         value: "18"        # update to your actual cost per unit
+      - key: SHIPPING_PER_ORDER
+        value: "8"
       # ── Dashboard password ────────────────────────────────────
       - key: DASHBOARD_PASSWORD
         sync: false       # set in Render dashboard — leave blank for no password
