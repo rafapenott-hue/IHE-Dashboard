@@ -219,10 +219,12 @@ def _track_ups(tn: str) -> dict:
                      "transId": f"ihe-{int(time.time())}", "transactionSrc": "IHE-Dashboard"},
             timeout=15)
         r.raise_for_status()
-        pkg    = r.json().get("trackResponse", {}).get("shipment", [{}])[0].get("package", [{}])[0]
-        acts   = pkg.get("activity", [])
-        latest = acts[0] if acts else {}
-        latest_desc = latest.get("status", {}).get("description", "")
+        shipment     = r.json().get("trackResponse", {}).get("shipment", [{}])[0]
+        pkg          = shipment.get("package", [{}])[0]
+        service_raw  = shipment.get("service", {}).get("description", "") or None
+        acts         = pkg.get("activity", [])
+        latest       = acts[0] if acts else {}
+        latest_desc  = latest.get("status", {}).get("description", "")
         events = [
             {
                 "timestamp":   f"{a.get('date','')} {a.get('time','')}".strip(),
@@ -232,14 +234,17 @@ def _track_ups(tn: str) -> dict:
             }
             for a in acts
         ]
-        eta_entry = pkg.get("deliveryDate", [{}])[0] if pkg.get("deliveryDate") else {}
+        eta_entry    = pkg.get("deliveryDate", [{}])[0] if pkg.get("deliveryDate") else {}
+        eta_raw      = eta_entry.get("date", "")   # "20260421"
+        est_delivery = f"{eta_raw[:4]}-{eta_raw[4:6]}-{eta_raw[6:8]}" if len(eta_raw) == 8 else None
         result = {
             "carrier":            "ups",
             "tracking_number":    tn,
             "status":             _norm_status("ups", latest_desc),
             "status_description": latest_desc,
-            "location":           events[0]["location"] if events else "",
-            "eta":                eta_entry.get("date", ""),
+            "service":            service_raw,
+            "latest_location":    events[0]["location"] if events else "",
+            "estimated_delivery": est_delivery,
             "events":             events[:20],
         }
         _TRACK_CACHE[tn] = {"data": result, "ts": time.time()}

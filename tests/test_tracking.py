@@ -53,6 +53,7 @@ def _fedex_response(code, description, city="Miami", state="FL", eta="2026-04-14
                 "code": code, "description": description,
                 "scanLocation": {"city": city, "stateOrProvinceCode": state}
             },
+            "serviceDetail": {"description": "FedEx Ground"},
             "estimatedDeliveryTimeWindow": {"window": {"ends": eta}},
             "scanEvents": [],
         }]}]}
@@ -68,8 +69,10 @@ def test_track_fedex_delivered():
         result = _track_fedex("794644823401")
     assert result["status"] == "delivered"
     assert result["carrier"] == "fedex"
-    assert result["location"] == "Miami, FL"
-    assert result["eta"] == "2026-04-14T00:00:00"
+    assert result["latest_location"] == "Miami, FL"
+    assert result["estimated_delivery"] == "2026-04-14"
+    assert result["service"] == "FedEx Ground"
+    assert "eta" not in result
 
 def test_track_fedex_no_token():
     with patch("api_server._fedex_token", return_value=None):
@@ -97,9 +100,9 @@ def test_track_fedex_api_error():
 
 # ── _track_ups ─────────────────────────────────────────────────
 
-def _ups_response(description, city="Atlanta", state="GA", eta_date="20260415"):
+def _ups_response(description, city="Atlanta", state="GA", eta_date="20260415", service="UPS Ground"):
     return {
-        "trackResponse": {"shipment": [{"package": [{
+        "trackResponse": {"shipment": [{"service": {"description": service}, "package": [{
             "activity": [{
                 "location": {"address": {"city": city, "stateOrProvinceCode": state}},
                 "status": {"description": description},
@@ -115,11 +118,15 @@ def test_track_ups_in_transit():
     mock_resp.raise_for_status = MagicMock()
     with patch("api_server._ups_token", return_value="tok"), \
          patch("api_server.requests.get", return_value=mock_resp), \
+         patch.dict(os.environ, {"UPS_CLIENT_ID": "x", "UPS_CLIENT_SECRET": "y"}), \
          patch.dict(api_server._TRACK_CACHE, {}, clear=True):
         result = _track_ups("1Z999AA10123456784")
     assert result["status"] == "in_transit"
     assert result["carrier"] == "ups"
-    assert result["eta"] == "20260415"
+    assert result["estimated_delivery"] == "2026-04-15"
+    assert result["service"] == "UPS Ground"
+    assert result["latest_location"] == "Atlanta, GA"
+    assert "eta" not in result
 
 def test_track_ups_no_token():
     with patch("api_server._ups_token", return_value=None):
@@ -146,7 +153,8 @@ def _usps_response(event_type, city="Miami", state="FL", eta="2026-04-16"):
             "eventType": event_type,
             "eventCity": city, "eventState": state, "eventZIPCode": "33101"
         }],
-        "expectedDeliveryDate": eta
+        "expectedDeliveryDate": eta,
+        "mailClass": "USPS Ground Advantage"
     }
 
 def test_track_usps_delivered():
@@ -159,7 +167,10 @@ def test_track_usps_delivered():
         result = _track_usps("9400111899223397846233")
     assert result["status"] == "delivered"
     assert result["carrier"] == "usps"
-    assert result["eta"] == "2026-04-16"
+    assert result["estimated_delivery"] == "2026-04-16"
+    assert result["latest_location"] == "Miami, FL"
+    assert result["service"] == "USPS Ground Advantage"
+    assert "eta" not in result
 
 def test_track_usps_no_token():
     with patch("api_server._usps_token", return_value=None):
