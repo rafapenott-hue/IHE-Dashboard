@@ -229,7 +229,7 @@ def test_normalize_shopify_order_extracts_tracking():
                           "status": "success"}],
     }
     fees = {"amazon_fee": 15, "shopify_fee": 2, "stripe_pct": 2.9,
-            "stripe_fixed": 0.30, "cogs_per_unit": 18}
+            "stripe_fixed": 0.30, "cogs_per_unit": 18, "shipping_per_order": 8.0}
     order = normalize_shopify_order(raw, fees)
     assert order["tracking_number"] == "794644823401"
     assert order["carrier"] == "FedEx"
@@ -243,7 +243,7 @@ def test_normalize_shopify_order_no_fulfillment():
         "billing_address": {}, "line_items": [], "fulfillments": [],
     }
     fees = {"amazon_fee": 15, "shopify_fee": 2, "stripe_pct": 2.9,
-            "stripe_fixed": 0.30, "cogs_per_unit": 18}
+            "stripe_fixed": 0.30, "cogs_per_unit": 18, "shipping_per_order": 8.0}
     order = normalize_shopify_order(raw, fees)
     assert order["tracking_number"] is None
     assert order["carrier"] is None
