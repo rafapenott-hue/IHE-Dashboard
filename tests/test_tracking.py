@@ -128,10 +128,17 @@ def test_track_ups_in_transit():
     assert result["latest_location"] == "Atlanta, GA"
     assert "eta" not in result
 
-def test_track_ups_no_token():
-    with patch("api_server._ups_token", return_value=None):
+def test_track_ups_no_credentials():
+    with patch.dict(os.environ, {"UPS_CLIENT_ID": "", "UPS_CLIENT_SECRET": ""}):
         result = _track_ups("1Z999AA10123456784")
     assert result["status"] == "no_credentials"
+
+def test_track_ups_auth_error():
+    with patch.dict(os.environ, {"UPS_CLIENT_ID": "x", "UPS_CLIENT_SECRET": "y"}), \
+         patch("api_server._ups_token", return_value=None), \
+         patch.dict(api_server._TRACK_CACHE, {}, clear=True):
+        result = _track_ups("1Z999AA10123456784")
+    assert result["status"] == "auth_error"
 
 def test_track_ups_cache_hit():
     cached_data = {"carrier": "ups", "tracking_number": "1Z999AA10123456784",
