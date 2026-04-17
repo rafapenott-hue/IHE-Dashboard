@@ -11,5 +11,5 @@ jobs:
     steps:
       - name: Send digest
         run: |
-          curl --fail --silent --show-error -X POST \
+          curl --fail --silent --show-error --max-time 120 -X POST \
             "https://ihe-dashboard.onrender.com/api/digest?secret=${{ secrets.DIGEST_SECRET }}"
