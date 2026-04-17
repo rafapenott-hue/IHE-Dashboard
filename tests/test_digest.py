@@ -59,10 +59,18 @@ def test_digest_endpoint_wrong_secret():
         assert resp.status_code == 401
 
 
-def test_digest_endpoint_not_configured():
+def test_digest_endpoint_digest_not_configured():
     from api_server import app
-    env = {"DIGEST_SECRET": "", "TELEGRAM_BOT_TOKEN": "", "TELEGRAM_CHAT_ID": ""}
-    with patch.dict(os.environ, env):
+    with patch.dict(os.environ, {"DIGEST_SECRET": ""}):
         client = app.test_client()
         resp = client.post("/api/digest")
+        assert resp.status_code == 503
+
+
+def test_digest_endpoint_telegram_not_configured():
+    from api_server import app
+    env = {"DIGEST_SECRET": "abc123", "TELEGRAM_BOT_TOKEN": "", "TELEGRAM_CHAT_ID": ""}
+    with patch.dict(os.environ, env):
+        client = app.test_client()
+        resp = client.post("/api/digest?secret=abc123")
         assert resp.status_code == 503

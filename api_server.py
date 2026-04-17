@@ -27,6 +27,7 @@ ENDPOINTS:
 """
 
 import os
+import hmac
 import json
 import time
 import datetime
@@ -894,7 +895,7 @@ def post_digest():
     secret = os.environ.get("DIGEST_SECRET", "")
     if not secret:
         return jsonify({"error": "digest not configured"}), 503
-    if request.args.get("secret") != secret:
+    if not hmac.compare_digest(request.args.get("secret", ""), secret):
         return jsonify({"error": "unauthorized"}), 401
 
     tg_token  = os.environ.get("TELEGRAM_BOT_TOKEN", "")
