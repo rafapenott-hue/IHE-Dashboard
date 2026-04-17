@@ -1,0 +1,15 @@
+name: Daily Telegram Digest
+
+on:
+  schedule:
+    - cron: '0 13 * * *'   # 13:00 UTC = ~8am ET (9am EDT)
+  workflow_dispatch:        # allow manual trigger from GitHub Actions UI
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send digest
+        run: |
+          curl --fail --silent --show-error -X POST \
+            "https://ihe-dashboard.onrender.com/api/digest?secret=${{ secrets.DIGEST_SECRET }}"
