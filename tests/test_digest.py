@@ -37,3 +37,4 @@ def test_build_digest_message_zero_orders():
     }
     msg = build_digest_message(totals)
     assert "No orders yesterday" in msg
+    assert "Mon Apr 13" in msg
