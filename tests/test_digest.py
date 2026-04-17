@@ -38,3 +38,31 @@ def test_build_digest_message_zero_orders():
     msg = build_digest_message(totals)
     assert "No orders yesterday" in msg
     assert "Mon Apr 13" in msg
+
+
+from unittest.mock import patch
+
+
+def test_digest_endpoint_no_secret():
+    from api_server import app
+    with patch.dict(os.environ, {"DIGEST_SECRET": "abc123"}):
+        client = app.test_client()
+        resp = client.post("/api/digest")
+        assert resp.status_code == 401
+
+
+def test_digest_endpoint_wrong_secret():
+    from api_server import app
+    with patch.dict(os.environ, {"DIGEST_SECRET": "abc123"}):
+        client = app.test_client()
+        resp = client.post("/api/digest?secret=wrong")
+        assert resp.status_code == 401
+
+
+def test_digest_endpoint_not_configured():
+    from api_server import app
+    env = {"DIGEST_SECRET": "", "TELEGRAM_BOT_TOKEN": "", "TELEGRAM_CHAT_ID": ""}
+    with patch.dict(os.environ, env):
+        client = app.test_client()
+        resp = client.post("/api/digest")
+        assert resp.status_code == 503

@@ -685,9 +685,7 @@ def get_amazon_order_items():
 # SUMMARY  (used by daily Telegram report)
 # ─────────────────────────────────────────────────────────────
 
-@app.route("/api/summary")
-def get_summary():
-    period = request.args.get("period", "yesterday")
+def _compute_summary(period: str = "yesterday") -> dict:
     et     = datetime.timezone(datetime.timedelta(hours=-4))
     now_et = datetime.datetime.now(et)
 
@@ -722,15 +720,15 @@ def get_summary():
         except Exception as e:
             errors.append(f"Shopify: {e}")
 
-    client_id     = cfg("AMAZON_CLIENT_ID",    "X-Amazon-Client-Id")
-    client_secret = cfg("AMAZON_CLIENT_SECRET","X-Amazon-Client-Secret")
-    refresh_token = cfg("AMAZON_REFRESH_TOKEN","X-Amazon-Refresh-Token")
-    marketplace   = cfg("AMAZON_MARKETPLACE_ID","X-Amazon-Marketplace","ATVPDKIKX0DER")
-    region        = cfg("AMAZON_REGION","X-Amazon-Region","us-east-1")
+    client_id     = cfg("AMAZON_CLIENT_ID",     "X-Amazon-Client-Id")
+    client_secret = cfg("AMAZON_CLIENT_SECRET", "X-Amazon-Client-Secret")
+    refresh_token = cfg("AMAZON_REFRESH_TOKEN", "X-Amazon-Refresh-Token")
+    marketplace   = cfg("AMAZON_MARKETPLACE_ID","X-Amazon-Marketplace", "ATVPDKIKX0DER")
+    region        = cfg("AMAZON_REGION",        "X-Amazon-Region",      "us-east-1")
     if client_id and client_secret and refresh_token:
         try:
             for o in amazon_fetch_orders(client_id, client_secret, refresh_token,
-                                          marketplace, region, start_iso):
+                                         marketplace, region, start_iso):
                 raw_dt = o.get("PurchaseDate", "")
                 if not raw_dt:
                     continue
@@ -745,16 +743,16 @@ def get_summary():
         "total_orders":   len(orders),
         "shopify_orders": sum(1 for o in orders if o["platform"] == "shopify"),
         "amazon_orders":  sum(1 for o in orders if o["platform"] == "amazon"),
-        "gross_revenue":  round(sum(o["gross"]        for o in orders), 2),
-        "amazon_fees":    round(sum(o["platform_fee"] for o in orders
+        "gross_revenue":  round(sum(o["gross"]          for o in orders), 2),
+        "amazon_fees":    round(sum(o["platform_fee"]   for o in orders
                                     if o["platform"] == "amazon"), 2),
-        "shopify_fees":   round(sum(o["platform_fee"] for o in orders
+        "shopify_fees":   round(sum(o["platform_fee"]   for o in orders
                                     if o["platform"] == "shopify"), 2),
-        "stripe_fees":    round(sum(o["stripe_fee"]   for o in orders), 2),
+        "stripe_fees":    round(sum(o["stripe_fee"]     for o in orders), 2),
         "cogs":           round(sum(o["cogs"]           for o in orders), 2),
-        "shipping":       round(sum(o.get("shipping", 0) for o in orders), 2),
+        "shipping":       round(sum(o.get("shipping",0) for o in orders), 2),
         "total_fees":     round(sum(o["total_fees"]     for o in orders), 2),
-        "net_revenue":    round(sum(o["net"]          for o in orders), 2),
+        "net_revenue":    round(sum(o["net"]            for o in orders), 2),
         "total_units":    sum(o["units"] for o in orders),
         "period":         period,
         "period_start":   start.isoformat(),
@@ -766,7 +764,13 @@ def get_summary():
     totals["avg_order"]   = round(g / totals["total_orders"], 2) if totals["total_orders"] else 0
     totals["vendor_owed"] = totals["cogs"]
     totals["cogs_source"] = "per_sku" if _COGS["shopify"] else "flat_rate"
-    return jsonify(totals)
+    return totals
+
+
+@app.route("/api/summary")
+def get_summary():
+    period = request.args.get("period", "yesterday")
+    return jsonify(_compute_summary(period))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -876,6 +880,35 @@ def health():
         "ups_configured":      bool(os.environ.get("UPS_CLIENT_ID") and os.environ.get("UPS_CLIENT_SECRET")),
         "usps_configured":     bool(os.environ.get("USPS_CLIENT_ID") and os.environ.get("USPS_CLIENT_SECRET")),
     })
+
+
+def send_telegram(token: str, chat_id: str, text: str) -> None:
+    url  = f"https://api.telegram.org/bot{token}/sendMessage"
+    resp = requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
+    if not resp.ok:
+        raise RuntimeError(f"Telegram error {resp.status_code}: {resp.text}")
+
+
+@app.route("/api/digest", methods=["POST"])
+def post_digest():
+    secret = os.environ.get("DIGEST_SECRET", "")
+    if not secret:
+        return jsonify({"error": "digest not configured"}), 503
+    if request.args.get("secret") != secret:
+        return jsonify({"error": "unauthorized"}), 401
+
+    tg_token  = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    tg_chat   = os.environ.get("TELEGRAM_CHAT_ID",   "")
+    if not tg_token or not tg_chat:
+        return jsonify({"error": "Telegram not configured"}), 503
+
+    try:
+        totals  = _compute_summary("yesterday")
+        message = build_digest_message(totals)
+        send_telegram(tg_token, tg_chat, message)
+        return jsonify({"ok": True, "message": message})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 # ─────────────────────────────────────────────────────────────
