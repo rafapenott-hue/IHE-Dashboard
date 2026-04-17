@@ -353,6 +353,20 @@ def cfg(env_key: str, header_key: str = None, default: str = "") -> str:
         val = request.headers.get(header_key, "").strip()
     return val or default
 
+def build_digest_message(totals: dict) -> str:
+    date_str = datetime.datetime.fromisoformat(totals["period_start"]).strftime("%a %b %-d")
+    if totals["total_orders"] == 0:
+        return f"📦 IHE — {date_str}\n\nNo orders yesterday."
+    sh = totals["shopify_orders"]
+    am = totals["amazon_orders"]
+    return (
+        f"📦 IHE — {date_str}\n\n"
+        f"Orders: {totals['total_orders']}  ({sh} Shopify · {am} Amazon)\n"
+        f"Gross:  ${totals['gross_revenue']:,.2f}\n"
+        f"Net:    ${totals['net_revenue']:,.2f}  ({totals['net_margin']}%)\n"
+        f"AOV:    ${totals['avg_order']:,.2f}"
+    )
+
 def fee_cfg() -> dict:
     return {
         "amazon_fee":    float(os.environ.get("AMAZON_FEE_PCT",    "15")),
