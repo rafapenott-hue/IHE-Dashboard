@@ -57,10 +57,15 @@ def _iso_utc(dt: datetime.datetime) -> str:
     return dt.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+_METRIC_ID_CACHE = {}
+
 def _find_metric_id(api_key: str, name: str, errors: list) -> str:
-    data = _get(api_key, "/metrics", {"page[size]": 200}, errors, f"metrics({name})")
+    if name in _METRIC_ID_CACHE:
+        return _METRIC_ID_CACHE[name]
+    data = _get(api_key, "/metrics", {}, errors, f"metrics({name})")
     for m in data.get("data", []):
         if m.get("attributes", {}).get("name") == name:
+            _METRIC_ID_CACHE[name] = m["id"]
             return m["id"]
     return ""
 
@@ -112,8 +117,7 @@ def fetch_weekly_metrics(api_key: str,
         api_key, "/campaigns",
         {"filter": (f"greater-or-equal(scheduled_at,{start_iso}),"
                     f"less-or-equal(scheduled_at,{end_iso}),"
-                    f'equals(messages.channel,"email")'),
-         "page[size]": 50},
+                    f'equals(messages.channel,"email")')},
         out["errors"], "campaigns",
     )
     sent_campaigns = [

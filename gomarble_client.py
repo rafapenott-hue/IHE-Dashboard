@@ -56,6 +56,22 @@ def _fmt_date(dt: datetime.datetime) -> str:
     return dt.strftime("%Y-%m-%d")
 
 
+def _unwrap_error(e: Exception) -> str:
+    """Dig through asyncio TaskGroup/ExceptionGroup chains to find the real message."""
+    msg = f"{type(e).__name__}: {e}"
+    # Python 3.11+ ExceptionGroup has .exceptions
+    inner = getattr(e, "exceptions", None)
+    if inner:
+        msg += " | inner: " + "; ".join(
+            f"{type(x).__name__}: {str(x)[:140]}" for x in inner[:3]
+        )
+    # asyncio might also set __cause__
+    cause = getattr(e, "__cause__", None)
+    if cause:
+        msg += f" | cause: {type(cause).__name__}: {str(cause)[:140]}"
+    return msg[:400]
+
+
 def _google_metrics(start, end, errors) -> dict:
     gaql = (
         f"SELECT metrics.cost_micros, metrics.conversions, "
@@ -65,7 +81,7 @@ def _google_metrics(start, end, errors) -> dict:
     try:
         payload = _run(_call_mcp_tool("google_ads_run_gaql", {"query": gaql}))
     except Exception as e:
-        errors.append(f"GoMarble Google: {e}")
+        errors.append(f"GoMarble Google: {_unwrap_error(e)}")
         return {"spend": 0, "revenue": 0, "conversions": 0, "roas": 0}
     rows = payload.get("rows", []) if payload else []
     spend = sum(r.get("metrics", {}).get("costMicros", 0) for r in rows) / 1_000_000
@@ -88,7 +104,7 @@ def _meta_metrics(start, end, errors) -> dict:
     try:
         payload = _run(_call_mcp_tool("facebook_get_adaccount_insights", args))
     except Exception as e:
-        errors.append(f"GoMarble Meta: {e}")
+        errors.append(f"GoMarble Meta: {_unwrap_error(e)}")
         return {"spend": 0, "revenue": 0, "conversions": 0, "roas": 0}
     data = payload.get("data", []) if payload else []
     spend = sum(float(d.get("spend", 0)) for d in data)
