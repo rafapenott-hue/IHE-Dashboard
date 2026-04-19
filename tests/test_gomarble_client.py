@@ -44,7 +44,8 @@ def test_fetch_weekly_ads_happy_path():
             assert args.get("customer_id") == "123-456-7890"
             return google_payload
         if tool_name == "facebook_get_adaccount_insights":
-            assert args.get("ad_account_id") == "act_987654321"
+            assert args.get("act_id") == "act_987654321"
+            assert isinstance(args.get("time_range"), str)
             return meta_payload
         raise AssertionError(f"unexpected tool {tool_name}")
 
