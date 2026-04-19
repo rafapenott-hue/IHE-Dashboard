@@ -56,20 +56,19 @@ def _fmt_date(dt: datetime.datetime) -> str:
     return dt.strftime("%Y-%m-%d")
 
 
-def _unwrap_error(e: Exception) -> str:
-    """Dig through asyncio TaskGroup/ExceptionGroup chains to find the real message."""
-    msg = f"{type(e).__name__}: {e}"
-    # Python 3.11+ ExceptionGroup has .exceptions
+def _unwrap_error(e: BaseException, depth: int = 0) -> str:
+    """Recursively dig through ExceptionGroup / __cause__ chains to find
+    the real leaf exception. Returns a flat string with type and message."""
+    if depth > 6:
+        return f"{type(e).__name__}: {str(e)[:160]}"
     inner = getattr(e, "exceptions", None)
     if inner:
-        msg += " | inner: " + "; ".join(
-            f"{type(x).__name__}: {str(x)[:140]}" for x in inner[:3]
-        )
-    # asyncio might also set __cause__
+        # Recurse into the first sub-exception (usually the only one)
+        return _unwrap_error(inner[0], depth + 1)
     cause = getattr(e, "__cause__", None)
-    if cause:
-        msg += f" | cause: {type(cause).__name__}: {str(cause)[:140]}"
-    return msg[:400]
+    if cause is not None and cause is not e:
+        return f"{type(e).__name__} <- {_unwrap_error(cause, depth + 1)}"
+    return f"{type(e).__name__}: {str(e)[:200]}"
 
 
 def _google_metrics(start, end, errors) -> dict:
