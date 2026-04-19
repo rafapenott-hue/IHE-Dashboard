@@ -182,6 +182,14 @@ def _meta_metrics(start, end, errors) -> dict:
     except Exception as e:
         errors.append(f"GoMarble Meta: {_unwrap_error(e)}")
         return {"spend": 0, "revenue": 0, "conversions": 0, "roas": 0}
+    # DEBUG: surface the top-level shape of the response so we know the parser matches
+    import json as _json
+    try:
+        preview = _json.dumps(payload, default=str)[:400] if payload else "empty"
+    except Exception:
+        preview = str(payload)[:400]
+    errors.append(f"Meta DEBUG payload preview: {preview}")
+
     data = payload.get("data", []) if payload else []
     spend = sum(float(d.get("spend", 0)) for d in data)
     rev   = 0.0
