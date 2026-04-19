@@ -36,9 +36,15 @@ def test_fetch_weekly_ads_happy_path():
     }
 
     async def fake_call(tool_name, args):
+        if tool_name == "google_ads_list_accounts":
+            return {"accounts": [{"id": "123-456-7890"}]}
+        if tool_name == "facebook_list_ad_accounts":
+            return {"data": [{"id": "act_987654321"}]}
         if tool_name == "google_ads_run_gaql":
+            assert args.get("customer_id") == "123-456-7890"
             return google_payload
         if tool_name == "facebook_get_adaccount_insights":
+            assert args.get("ad_account_id") == "act_987654321"
             return meta_payload
         raise AssertionError(f"unexpected tool {tool_name}")
 
