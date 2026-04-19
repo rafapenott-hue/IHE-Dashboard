@@ -33,11 +33,25 @@ async def _call_mcp_tool(tool_name: str, args: dict) -> dict:
                 session.call_tool(tool_name, args),
                 timeout=CALL_TIMEOUT_SEC,
             )
+            # If MCP flagged the call as an error, raise with the text so it surfaces
+            if getattr(result, "isError", False):
+                texts = []
+                for c in (getattr(result, "content", []) or []):
+                    if hasattr(c, "text"):
+                        texts.append(c.text)
+                raise RuntimeError(f"MCP tool error: {' | '.join(texts)[:260]}")
+            # Otherwise parse the first text block as JSON, tolerating non-JSON
             if hasattr(result, "content") and result.content:
                 first = result.content[0]
-                if hasattr(first, "text"):
+                if hasattr(first, "text") and first.text:
                     import json
-                    return json.loads(first.text)
+                    text = first.text.strip()
+                    try:
+                        return json.loads(text)
+                    except Exception:
+                        raise RuntimeError(
+                            f"non-JSON tool response: {text[:200]}"
+                        )
             return {}
 
 
