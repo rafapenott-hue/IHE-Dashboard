@@ -139,14 +139,22 @@ def _first_meta_account_id(errors) -> str:
     except Exception as e:
         errors.append(f"GoMarble Meta list_accounts: {_unwrap_error(e)}")
         return ""
-    for k in ("accounts", "data", "ad_accounts", "rows"):
-        arr = resp.get(k) if isinstance(resp, dict) else None
+    if not isinstance(resp, dict):
+        errors.append(f"Meta list_accounts: unexpected shape: {str(resp)[:200]}")
+        return ""
+    for k in ("accounts", "data", "ad_accounts", "rows", "result"):
+        arr = resp.get(k)
         if arr and isinstance(arr, list):
             first = arr[0]
             if isinstance(first, dict):
-                return str(first.get("id") or first.get("account_id")
-                           or first.get("ad_account_id") or "")
+                for id_key in ("id", "account_id", "ad_account_id", "accountId", "adAccountId"):
+                    val = first.get(id_key)
+                    if val:
+                        return str(val)
+                errors.append(f"Meta list_accounts: first account has no id field. Keys: {list(first.keys())[:10]}")
+                return ""
             return str(first)
+    errors.append(f"Meta list_accounts: no list found. Top-level keys: {list(resp.keys())[:10]}")
     return ""
 
 
