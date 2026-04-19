@@ -163,16 +163,27 @@ def _meta_metrics(start, end, errors) -> dict:
     if not account_id:
         errors.append("GoMarble Meta: no ad_account_id found via list_ad_accounts")
         return {"spend": 0, "revenue": 0, "conversions": 0, "roas": 0}
-    args = {
-        "ad_account_id": account_id,
-        "time_range":    {"since": _fmt_date(start), "until": _fmt_date(end)},
-        "fields":        ["spend", "actions", "action_values"],
-        "level":         "account",
-    }
-    try:
-        payload = _run(_call_mcp_tool("facebook_get_adaccount_insights", args))
-    except Exception as e:
-        errors.append(f"GoMarble Meta: {_unwrap_error(e)}")
+    errors.append(f"Meta DEBUG: resolved account_id={account_id[:40]}")
+
+    # Ensure the "act_" prefix Meta's Marketing API requires
+    acct = account_id if account_id.startswith("act_") else f"act_{account_id}"
+
+    # Try common param name variants — GoMarble's schema may use any of these
+    variants = [
+        {"account_id":    acct, "time_range": {"since": _fmt_date(start), "until": _fmt_date(end)}, "fields": ["spend", "actions", "action_values"], "level": "account"},
+        {"ad_account_id": acct, "time_range": {"since": _fmt_date(start), "until": _fmt_date(end)}, "fields": ["spend", "actions", "action_values"], "level": "account"},
+        {"adAccountId":   acct, "time_range": {"since": _fmt_date(start), "until": _fmt_date(end)}, "fields": ["spend", "actions", "action_values"], "level": "account"},
+    ]
+    payload = None
+    last_err = None
+    for args in variants:
+        try:
+            payload = _run(_call_mcp_tool("facebook_get_adaccount_insights", args))
+            break
+        except Exception as e:
+            last_err = _unwrap_error(e)
+    if payload is None:
+        errors.append(f"GoMarble Meta (all variants failed): {last_err}")
         return {"spend": 0, "revenue": 0, "conversions": 0, "roas": 0}
     data = payload.get("data", []) if payload else []
     spend = sum(float(d.get("spend", 0)) for d in data)
