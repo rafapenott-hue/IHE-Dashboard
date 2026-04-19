@@ -35,6 +35,7 @@ from typing import Optional
 import requests
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from weekly_digest import build_weekly_report, format_weekly_message
 
 app  = Flask(__name__)
 CORS(app, origins=["*"])
@@ -922,6 +923,27 @@ def post_digest():
         return jsonify({"ok": True, "message": message})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/digest/weekly", methods=["POST"])
+def post_digest_weekly():
+    secret = os.environ.get("DIGEST_SECRET", "")
+    if not secret:
+        return jsonify({"error": "digest not configured"}), 503
+    if request.args.get("secret") != secret:
+        return jsonify({"error": "unauthorized"}), 401
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id   = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if not bot_token or not chat_id:
+        return jsonify({"error": "digest not configured"}), 503
+    try:
+        report  = build_weekly_report()
+        message = format_weekly_message(report)
+        send_telegram(bot_token, chat_id, message)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True, "message": message,
+                    "errors": report.get("errors", [])}), 200
 
 
 # ─────────────────────────────────────────────────────────────
