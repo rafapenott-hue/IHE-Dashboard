@@ -17,11 +17,14 @@ def _period_label(start: datetime.datetime, end: datetime.datetime) -> str:
 
 
 def top_product(orders: list) -> tuple:
+    """Most frequent line-item product across orders, counted once per order.
+    Normalized orders from api_server use 'title'; test fixtures use 'name' —
+    support both so the function is resilient to input shape."""
     counter = Counter()
     for o in orders:
         names_in_order = set()
         for li in o.get("line_items", []) or []:
-            name = li.get("name", "")
+            name = li.get("title") or li.get("name") or ""
             if name:
                 names_in_order.add(name)
         for name in names_in_order:
@@ -33,10 +36,15 @@ def top_product(orders: list) -> tuple:
 
 
 def top_states(orders: list, n: int = 3) -> list:
+    """Top US states by order count. Accepts either a flat `state` field
+    (from normalized orders) or a nested billing_address dict (test fixtures)."""
     counter = Counter()
     for o in orders:
-        addr = o.get("billing_address") or {}
-        state = addr.get("province_code") or addr.get("state_code") or addr.get("state")
+        state = o.get("state") or ""
+        if not state:
+            addr = o.get("billing_address") or {}
+            state = (addr.get("province_code") or addr.get("state_code")
+                     or addr.get("state") or "")
         if state:
             counter[state] += 1
     return counter.most_common(n)

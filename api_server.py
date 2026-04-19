@@ -433,6 +433,7 @@ def normalize_shopify_order(o: dict, fees: dict) -> dict:
 
     bill         = o.get("billing_address") or {}
     name         = f"{bill.get('first_name','')} {bill.get('last_name','')}".strip() or "Customer"
+    state        = bill.get("province_code") or bill.get("province") or ""
     fulfillments = o.get("fulfillments", [])
     tracking_num = fulfillments[0].get("tracking_number") if fulfillments else None
     carrier_name = fulfillments[0].get("tracking_company") if fulfillments else None
@@ -444,6 +445,7 @@ def normalize_shopify_order(o: dict, fees: dict) -> dict:
         "gross":        round(gross, 2),
         "units":        total_units,
         "customer":     name,
+        "state":        state,
         "status":       o.get("financial_status", ""),
         "platform_fee": round(platform_fee, 2),
         "stripe_fee":   round(stripe_fee, 2),
@@ -602,6 +604,7 @@ def normalize_amazon_order(o: dict, fees: dict, order_items: list = None) -> dic
     shipping    = fees["shipping_per_order"]
     total_fees  = amazon_fee + cogs + shipping
 
+    ship_state  = ((o.get("ShippingAddress") or {}).get("StateOrRegion") or "")[:2].upper()
     return {
         "id":           o.get("AmazonOrderId", ""),
         "platform":     "amazon",
@@ -609,6 +612,7 @@ def normalize_amazon_order(o: dict, fees: dict, order_items: list = None) -> dic
         "gross":        round(gross, 2),
         "units":        total_units,
         "customer":     "Amazon Customer",
+        "state":        ship_state,
         "status":       o.get("OrderStatus", ""),
         "platform_fee": round(amazon_fee, 2),
         "stripe_fee":   0.0,
