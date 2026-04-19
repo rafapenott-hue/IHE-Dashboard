@@ -109,7 +109,22 @@ def build_weekly_report() -> dict:
     report_for_llm["mtd"]["sales"] = {
         k: v for k, v in report["mtd"]["sales"].items() if k != "orders"
     }
-    report["insights"] = generate_insights(report_for_llm)
+    insights_result = generate_insights(report_for_llm)
+    if isinstance(insights_result, dict):
+        report["insights"] = insights_result.get("bullets", [])
+        insights_errors = insights_result.get("errors", [])
+    else:
+        report["insights"] = insights_result or []
+        insights_errors = []
+
+    report["errors"] = (
+        list(lw_sales.get("errors", []))
+        + list(mtd_sales.get("errors", []))
+        + [f"klaviyo: {e}" for e in klaviyo.get("errors", [])]
+        + [f"ads_lw: {e}"  for e in ads_lw.get("errors", [])]
+        + [f"ads_mtd: {e}" for e in ads_mtd.get("errors", [])]
+        + [f"insights: {e}" for e in insights_errors]
+    )
 
     return report
 

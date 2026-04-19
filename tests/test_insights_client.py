@@ -8,51 +8,59 @@ from insights_client import generate_insights
 def _sample_report():
     return {
         "last_week": {
-            "sales": {"gross_revenue": 3214.50, "total_orders": 47,
-                      "net_margin": 36.7, "avg_order": 68.39,
-                      "top_product": "Jamón Ibérico 3oz Sliced",
-                      "top_states": [("CA", 12), ("FL", 9), ("NY", 5)]},
-            "klaviyo": {"campaigns_sent": 2, "open_rate": 28.4,
-                        "click_rate": 3.1, "attributed_revenue": 412.0,
-                        "new_subscribers": 23, "unsubscribes": 4},
-            "ads": {"google": {"spend": 180, "revenue": 756, "roas": 4.2},
-                    "meta":   {"spend": 240, "revenue": 672, "roas": 2.8},
-                    "blended_roas": 3.4},
+            "sales": {"gross_revenue": 3214.50, "total_orders": 47},
+            "klaviyo": {"campaigns_sent": 2, "attributed_revenue": 412.0},
+            "ads": {"blended_roas": 3.4},
         },
-        "prior_week": {"sales": {"gross_revenue": 2870.00}},
-        "mtd": {"sales": {"gross_revenue": 6180.0}, "ads": {"blended_roas": 3.6}},
+        "mtd": {"sales": {"gross_revenue": 6180.0}},
     }
 
 
 def test_generate_insights_happy_path():
     fake_response = MagicMock()
     fake_response.content = [MagicMock(text='["Bullet one.", "Bullet two.", "Bullet three."]')]
-
     with patch("insights_client.Anthropic") as cls:
-        inst = cls.return_value
-        inst.messages.create.return_value = fake_response
+        cls.return_value.messages.create.return_value = fake_response
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "fake"}):
-            bullets = generate_insights(_sample_report())
+            result = generate_insights(_sample_report())
+    assert result["bullets"] == ["Bullet one.", "Bullet two.", "Bullet three."]
+    assert result["errors"] == []
 
-    assert bullets == ["Bullet one.", "Bullet two.", "Bullet three."]
+
+def test_generate_insights_strips_markdown_fences():
+    fake_response = MagicMock()
+    fake_response.content = [MagicMock(text='```json\n["A", "B", "C"]\n```')]
+    with patch("insights_client.Anthropic") as cls:
+        cls.return_value.messages.create.return_value = fake_response
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "fake"}):
+            result = generate_insights(_sample_report())
+    assert result["bullets"] == ["A", "B", "C"]
 
 
 def test_generate_insights_no_api_key():
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": ""}):
-        assert generate_insights(_sample_report()) == []
+        result = generate_insights(_sample_report())
+    assert result["bullets"] == []
+    assert "ANTHROPIC_API_KEY" in result["errors"][0]
 
 
-def test_generate_insights_api_error_returns_empty():
+def test_generate_insights_api_error_captures_message():
     with patch("insights_client.Anthropic") as cls:
         cls.return_value.messages.create.side_effect = RuntimeError("boom")
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "fake"}):
-            assert generate_insights(_sample_report()) == []
+            result = generate_insights(_sample_report())
+    assert result["bullets"] == []
+    assert "RuntimeError" in result["errors"][0]
+    assert "boom" in result["errors"][0]
 
 
-def test_generate_insights_malformed_json_returns_empty():
+def test_generate_insights_malformed_json_captures_preview():
     fake_response = MagicMock()
-    fake_response.content = [MagicMock(text="this is not json")]
+    fake_response.content = [MagicMock(text="this is not json at all")]
     with patch("insights_client.Anthropic") as cls:
         cls.return_value.messages.create.return_value = fake_response
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "fake"}):
-            assert generate_insights(_sample_report()) == []
+            result = generate_insights(_sample_report())
+    assert result["bullets"] == []
+    assert "parse error" in result["errors"][0]
+    assert "this is not json" in result["errors"][0]
