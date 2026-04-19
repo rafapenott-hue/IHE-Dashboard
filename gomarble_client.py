@@ -39,7 +39,7 @@ async def _call_mcp_tool(tool_name: str, args: dict) -> dict:
                 for c in (getattr(result, "content", []) or []):
                     if hasattr(c, "text"):
                         texts.append(c.text)
-                raise RuntimeError(f"MCP tool error: {' | '.join(texts)[:260]}")
+                raise RuntimeError(f"MCP tool error: {' | '.join(texts)[:800]}")
             # Otherwise parse the first text block as JSON, tolerating non-JSON
             if hasattr(result, "content") and result.content:
                 first = result.content[0]
@@ -74,15 +74,14 @@ def _unwrap_error(e: BaseException, depth: int = 0) -> str:
     """Recursively dig through ExceptionGroup / __cause__ chains to find
     the real leaf exception. Returns a flat string with type and message."""
     if depth > 6:
-        return f"{type(e).__name__}: {str(e)[:160]}"
+        return f"{type(e).__name__}: {str(e)[:800]}"
     inner = getattr(e, "exceptions", None)
     if inner:
-        # Recurse into the first sub-exception (usually the only one)
         return _unwrap_error(inner[0], depth + 1)
     cause = getattr(e, "__cause__", None)
     if cause is not None and cause is not e:
         return f"{type(e).__name__} <- {_unwrap_error(cause, depth + 1)}"
-    return f"{type(e).__name__}: {str(e)[:200]}"
+    return f"{type(e).__name__}: {str(e)[:800]}"
 
 
 def _first_google_customer_id(errors) -> str:
