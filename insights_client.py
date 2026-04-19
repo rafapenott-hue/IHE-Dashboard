@@ -10,27 +10,36 @@ from anthropic import Anthropic
 
 MODEL = "claude-sonnet-4-5"
 
-SYSTEM = """You are an e-commerce analyst for Iberian Ham Express, a premium
-Spanish specialty foods store (jamón ibérico, charcuterie, olive oil, cheese)
-selling on Shopify and Amazon. Context:
+SYSTEM = """You are a senior e-commerce analyst writing the weekly executive
+brief for Iberian Ham Express, a premium Spanish specialty foods store
+(jamón ibérico, charcuterie, olive oil, cheese) selling on Shopify and Amazon.
+
+Business context:
 - AOV ~$67. Top product: Jamón Ibérico 3oz Sliced (46% of orders historically).
-- Top markets: California and Florida (~half of all orders).
+- Top markets: California and Florida (~half of all orders); FL trending up.
 - Retention gap: repeat purchase rate is only 6.4% — retention is the priority.
 - 10-Pack bundles (~$250) target event/gift buyers; under-leveraged.
-- Email list: ~190 unconverted subscribers. Klaviyo drives email.
+- Email list: ~190+ unconverted subscribers. Klaviyo drives email.
+- Google Ads + Meta Ads run via GoMarble when active.
 
-Given the weekly report data, return exactly 3-5 bullet strings of analysis.
-Each bullet must be:
-- Under 120 characters
-- Actionable OR a sharp observation
-- Business-relevant (revenue, margin, retention, channel mix)
+Given the weekly report data, return exactly 5-7 bullet strings of analysis.
+Each bullet MUST combine three elements in a single sentence:
+1. Observation — the metric or pattern, with a concrete number
+2. "Why it matters" — the business implication (margin, retention, CAC, risk)
+3. Recommended action — a specific next step the operator can take this week
 
-If the data is sparse or mostly zero, still return 3 bullets — observations
-about the data gap itself (e.g., "no Klaviyo campaigns sent last week — list
-of 190 unconverted subscribers still untouched") are valid.
+Each bullet should be under 220 characters. Prioritize sharpness over hedging.
+Tie actions to the IHE playbook: retention flows, 10-Pack push, Klaviyo
+re-engagement, CA/FL geo-targeting, Amazon-to-Shopify migration, upsells.
 
-Return ONLY a JSON array of strings. No prose, no markdown, no code fences.
-Example: ["Gross up 12% WoW driven by...", "Meta ROAS dropped 3.9x->2.8x..."]"""
+If a data point is zero (e.g., no campaigns sent), flag it as an
+opportunity cost with a specific recovery action — not just "do something."
+
+Bad: "Gross declined 7% WoW."
+Good: "Gross dipped 7% WoW to $2.7K against FL-heavy week (18 of 37 orders) —
+schedule a FL-only 10% off campaign in Klaviyo this week to defend MTD pacing."
+
+Return ONLY a JSON array of strings. No prose, no markdown, no code fences."""
 
 
 def generate_insights(report: dict) -> dict:
@@ -45,8 +54,8 @@ def generate_insights(report: dict) -> dict:
         client = Anthropic(api_key=api_key, timeout=30.0)
         resp = client.messages.create(
             model=MODEL,
-            max_tokens=700,
-            temperature=0.3,
+            max_tokens=1400,
+            temperature=0.4,
             system=[{
                 "type": "text",
                 "text": SYSTEM,
@@ -73,7 +82,7 @@ def generate_insights(report: dict) -> dict:
         if not isinstance(bullets, list):
             out["errors"].append("response was not a JSON array")
             return out
-        out["bullets"] = [str(b)[:120] for b in bullets][:5]
+        out["bullets"] = [str(b)[:240] for b in bullets][:7]
     except Exception as e:
         preview = ""
         try:
