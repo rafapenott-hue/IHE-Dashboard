@@ -85,14 +85,39 @@ def _unwrap_error(e: BaseException, depth: int = 0) -> str:
     return f"{type(e).__name__}: {str(e)[:200]}"
 
 
+def _first_google_customer_id(errors) -> str:
+    try:
+        resp = _run(_call_mcp_tool("google_ads_list_accounts", {}))
+    except Exception as e:
+        errors.append(f"GoMarble Google list_accounts: {_unwrap_error(e)}")
+        return ""
+    # Response shape varies; try common shapes
+    for k in ("accounts", "customers", "data", "rows"):
+        arr = resp.get(k) if isinstance(resp, dict) else None
+        if arr and isinstance(arr, list):
+            first = arr[0]
+            if isinstance(first, dict):
+                return str(first.get("id") or first.get("customer_id")
+                           or first.get("customerId") or first.get("resourceName", "").split("/")[-1])
+            return str(first)
+    return ""
+
+
 def _google_metrics(start, end, errors) -> dict:
+    customer_id = _first_google_customer_id(errors)
+    if not customer_id:
+        errors.append("GoMarble Google: no customer_id found via list_accounts")
+        return {"spend": 0, "revenue": 0, "conversions": 0, "roas": 0}
     gaql = (
         f"SELECT metrics.cost_micros, metrics.conversions, "
         f"metrics.conversions_value FROM customer "
         f"WHERE segments.date BETWEEN '{_fmt_date(start)}' AND '{_fmt_date(end)}'"
     )
     try:
-        payload = _run(_call_mcp_tool("google_ads_run_gaql", {"query": gaql}))
+        payload = _run(_call_mcp_tool(
+            "google_ads_run_gaql",
+            {"customer_id": customer_id, "query": gaql},
+        ))
     except Exception as e:
         errors.append(f"GoMarble Google: {_unwrap_error(e)}")
         return {"spend": 0, "revenue": 0, "conversions": 0, "roas": 0}
@@ -108,11 +133,33 @@ def _google_metrics(start, end, errors) -> dict:
     }
 
 
+def _first_meta_account_id(errors) -> str:
+    try:
+        resp = _run(_call_mcp_tool("facebook_list_ad_accounts", {}))
+    except Exception as e:
+        errors.append(f"GoMarble Meta list_accounts: {_unwrap_error(e)}")
+        return ""
+    for k in ("accounts", "data", "ad_accounts", "rows"):
+        arr = resp.get(k) if isinstance(resp, dict) else None
+        if arr and isinstance(arr, list):
+            first = arr[0]
+            if isinstance(first, dict):
+                return str(first.get("id") or first.get("account_id")
+                           or first.get("ad_account_id") or "")
+            return str(first)
+    return ""
+
+
 def _meta_metrics(start, end, errors) -> dict:
+    account_id = _first_meta_account_id(errors)
+    if not account_id:
+        errors.append("GoMarble Meta: no ad_account_id found via list_ad_accounts")
+        return {"spend": 0, "revenue": 0, "conversions": 0, "roas": 0}
     args = {
-        "time_range": {"since": _fmt_date(start), "until": _fmt_date(end)},
-        "fields":     ["spend", "actions", "action_values"],
-        "level":      "account",
+        "ad_account_id": account_id,
+        "time_range":    {"since": _fmt_date(start), "until": _fmt_date(end)},
+        "fields":        ["spend", "actions", "action_values"],
+        "level":         "account",
     }
     try:
         payload = _run(_call_mcp_tool("facebook_get_adaccount_insights", args))
