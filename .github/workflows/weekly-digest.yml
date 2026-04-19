@@ -1,0 +1,15 @@
+name: Weekly Telegram Digest
+
+on:
+  schedule:
+    - cron: '0 11 * * 1'   # 11:00 UTC Monday = 7am EDT / 6am EST
+  workflow_dispatch:
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send weekly digest
+        run: |
+          curl --fail --silent --show-error --max-time 180 -X POST \
+            "https://ihe-dashboard.onrender.com/api/digest/weekly?secret=${{ secrets.DIGEST_SECRET }}"
