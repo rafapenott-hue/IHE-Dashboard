@@ -686,28 +686,14 @@ def get_amazon_order_items():
 # SUMMARY  (used by daily Telegram report)
 # ─────────────────────────────────────────────────────────────
 
-def _compute_summary(period: str = "yesterday") -> dict:
-    et     = datetime.timezone(datetime.timedelta(hours=-4))
-    now_et = datetime.datetime.now(et)
-
-    if period == "yesterday":
-        day   = now_et - datetime.timedelta(days=1)
-        start = datetime.datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=et)
-        end   = datetime.datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=et)
-    elif period == "today":
-        start = now_et.replace(hour=0, minute=0, second=0)
-        end   = now_et
-    elif period == "week":
-        start = (now_et - datetime.timedelta(days=now_et.weekday())).replace(hour=0, minute=0, second=0)
-        end   = now_et
-    else:  # month
-        start = now_et.replace(day=1, hour=0, minute=0, second=0)
-        end   = now_et
-
+def _compute_summary_range(start: datetime.datetime, end: datetime.datetime) -> dict:
+    """Compute sales totals for an explicit (start, end) tz-aware range."""
     start_iso = start.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     fees      = fee_cfg()
     errors    = []
     orders    = []
+
+    et = start.tzinfo
 
     store = cfg("SHOPIFY_STORE", "X-Shopify-Store")
     token = cfg("SHOPIFY_TOKEN", "X-Shopify-Token")
@@ -741,24 +727,26 @@ def _compute_summary(period: str = "yesterday") -> dict:
             errors.append(f"Amazon: {e}")
 
     totals = {
-        "total_orders":   len(orders),
-        "shopify_orders": sum(1 for o in orders if o["platform"] == "shopify"),
-        "amazon_orders":  sum(1 for o in orders if o["platform"] == "amazon"),
-        "gross_revenue":  round(sum(o["gross"]          for o in orders), 2),
-        "amazon_fees":    round(sum(o["platform_fee"]   for o in orders
-                                    if o["platform"] == "amazon"), 2),
-        "shopify_fees":   round(sum(o["platform_fee"]   for o in orders
-                                    if o["platform"] == "shopify"), 2),
-        "stripe_fees":    round(sum(o["stripe_fee"]     for o in orders), 2),
-        "cogs":           round(sum(o["cogs"]           for o in orders), 2),
-        "shipping":       round(sum(o.get("shipping",0) for o in orders), 2),
-        "total_fees":     round(sum(o["total_fees"]     for o in orders), 2),
-        "net_revenue":    round(sum(o["net"]            for o in orders), 2),
-        "total_units":    sum(o["units"] for o in orders),
-        "period":         period,
-        "period_start":   start.isoformat(),
-        "period_end":     end.isoformat(),
-        "errors":         errors,
+        "total_orders":     len(orders),
+        "shopify_orders":   sum(1 for o in orders if o["platform"] == "shopify"),
+        "amazon_orders":    sum(1 for o in orders if o["platform"] == "amazon"),
+        "gross_revenue":    round(sum(o["gross"]          for o in orders), 2),
+        "amazon_fees":      round(sum(o["platform_fee"]   for o in orders
+                                      if o["platform"] == "amazon"), 2),
+        "shopify_fees":     round(sum(o["platform_fee"]   for o in orders
+                                      if o["platform"] == "shopify"), 2),
+        "stripe_fees":      round(sum(o["stripe_fee"]     for o in orders), 2),
+        "cogs":             round(sum(o["cogs"]           for o in orders), 2),
+        "shipping":         round(sum(o.get("shipping",0) for o in orders), 2),
+        "shipping_charged": round(sum(o.get("shipping_charged", 0) for o in orders), 2),
+        "shipping_net":     round(sum(o.get("shipping_net", 0)     for o in orders), 2),
+        "total_fees":       round(sum(o["total_fees"]     for o in orders), 2),
+        "net_revenue":      round(sum(o["net"]            for o in orders), 2),
+        "total_units":      sum(o["units"] for o in orders),
+        "period_start":     start.isoformat(),
+        "period_end":       end.isoformat(),
+        "errors":           errors,
+        "orders":           orders,
     }
     g = totals["gross_revenue"]
     totals["net_margin"]  = round(totals["net_revenue"] / g * 100, 1) if g else 0
@@ -766,6 +754,30 @@ def _compute_summary(period: str = "yesterday") -> dict:
     totals["vendor_owed"] = totals["cogs"]
     totals["cogs_source"] = "per_sku" if _COGS["shopify"] else "flat_rate"
     return totals
+
+
+def _compute_summary(period: str = "yesterday") -> dict:
+    """Backwards-compatible wrapper used by /api/summary and daily digest."""
+    et     = datetime.timezone(datetime.timedelta(hours=-4))
+    now_et = datetime.datetime.now(et)
+
+    if period == "yesterday":
+        day   = now_et - datetime.timedelta(days=1)
+        start = datetime.datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=et)
+        end   = datetime.datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=et)
+    elif period == "today":
+        start = now_et.replace(hour=0, minute=0, second=0)
+        end   = now_et
+    elif period == "week":
+        start = (now_et - datetime.timedelta(days=now_et.weekday())).replace(hour=0, minute=0, second=0)
+        end   = now_et
+    else:  # month
+        start = now_et.replace(day=1, hour=0, minute=0, second=0)
+        end   = now_et
+
+    result = _compute_summary_range(start, end)
+    result["period"] = period
+    return result
 
 
 @app.route("/api/summary")
