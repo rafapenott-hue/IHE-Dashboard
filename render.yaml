@@ -59,3 +59,10 @@ services:
         sync: false
       - key: USPS_CLIENT_SECRET
         sync: false
+      # ── Weekly digest: Klaviyo / GoMarble / Anthropic ─────────
+      - key: KLAVIYO_API_KEY
+        sync: false
+      - key: GOMARBLE_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
