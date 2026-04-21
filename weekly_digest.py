@@ -66,12 +66,13 @@ def _ads_line(label: str, m: dict) -> str:
 
 def _ads_empty_reason(errors: list) -> str:
     """Map GoMarble error strings to a user-facing one-liner."""
-    text = " ".join(errors)
-    if "maximum accounts limit" in text or "upgrade" in text.lower():
-        return ("GoMarble plan limit reached — Meta ad data is locked. "
-                "Upgrade at apps.gomarble.ai/settings/billing/plans or free "
-                "up a connected account.")
-    if "no API key" in text:
+    text = " ".join(errors).lower()
+    if ("usage limit" in text or "maximum accounts" in text
+            or "upgrade" in text or "rate limit" in text):
+        return ("GoMarble limit reached on your current plan — Meta ad data "
+                "is locked for this week. Upgrade at "
+                "apps.gomarble.ai/settings/billing/plans to unlock.")
+    if "no api key" in text:
         return "GoMarble API key not configured on Render."
     if "no ad_account_id found" in text or "no customer_id found" in text:
         return "GoMarble is connected but no ad account is linked yet."

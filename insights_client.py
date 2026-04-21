@@ -35,7 +35,8 @@ STRICT rules:
     1) What happened (with a real number)
     2) Why it matters in practical terms
     3) A specific, concrete action the owner can take this week
-- Each bullet under 240 characters. Plain numbers ("$2,675" not "$2.7K").
+- Each bullet under 320 characters, complete sentences, never cut off mid-word.
+  Plain numbers ("$2,675" not "$2.7K").
 - Prioritize usefulness over cleverness. Skip throat-clearing.
 
 If a metric is zero (no campaigns sent, no ad spend), treat it as a missed
@@ -92,7 +93,7 @@ def generate_insights(report: dict) -> dict:
         if not isinstance(bullets, list):
             out["errors"].append("response was not a JSON array")
             return out
-        out["bullets"] = [str(b)[:240] for b in bullets][:7]
+        out["bullets"] = [str(b)[:340] for b in bullets][:7]
     except Exception as e:
         preview = ""
         try:
