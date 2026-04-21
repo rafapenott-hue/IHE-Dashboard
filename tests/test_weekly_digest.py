@@ -87,7 +87,7 @@ def test_format_weekly_message_no_insights_shows_dash():
     assert "—" in msg
 
 
-def test_format_weekly_message_zero_ads_shows_dash():
+def test_format_weekly_message_zero_ads_shows_no_spend_message():
     report = _sample_report()
     report["last_week"]["ads"] = {
         "google": {"spend": 0, "revenue": 0, "roas": 0},
@@ -97,4 +97,17 @@ def test_format_weekly_message_zero_ads_shows_dash():
     msg = format_weekly_message(report)
     assert "📣 Ads" in msg
     ads_section = msg.split("📣 Ads")[1].split("━")[0]
-    assert "—" in ads_section
+    assert "No spend detected" in ads_section
+
+
+def test_format_weekly_message_gomarble_billing_limit_surfaced():
+    report = _sample_report()
+    report["last_week"]["ads"] = {
+        "google": {"spend": 0, "revenue": 0, "roas": 0},
+        "meta":   {"spend": 0, "revenue": 0, "roas": 0},
+        "blended_roas": 0,
+        "errors": ["GoMarble Meta: You have reached the maximum accounts limit for Facebook Ads"],
+    }
+    msg = format_weekly_message(report)
+    ads_section = msg.split("📣 Ads")[1].split("━")[0]
+    assert "plan limit" in ads_section.lower() or "upgrade" in ads_section.lower()

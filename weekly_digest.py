@@ -59,10 +59,23 @@ def _pct(a: float, b: float) -> int:
 def _ads_line(label: str, m: dict) -> str:
     if m.get("spend", 0) == 0 and m.get("revenue", 0) == 0:
         return ""
-    # Align "$" at position 8: "Google: $" = 9 chars, "Meta:   $" = 9 chars
     padded = f"{label}:{' ' * (7 - len(label))}"
     return (f"{padded}${m['spend']:,.0f} spend · "
-            f"{m['roas']:.1f}x ROAS · ${m['revenue']:,.0f} revenue")
+            f"{m['roas']:.1f}x return · ${m['revenue']:,.0f} revenue")
+
+
+def _ads_empty_reason(errors: list) -> str:
+    """Map GoMarble error strings to a user-facing one-liner."""
+    text = " ".join(errors)
+    if "maximum accounts limit" in text or "upgrade" in text.lower():
+        return ("GoMarble plan limit reached — Meta ad data is locked. "
+                "Upgrade at apps.gomarble.ai/settings/billing/plans or free "
+                "up a connected account.")
+    if "no API key" in text:
+        return "GoMarble API key not configured on Render."
+    if "no ad_account_id found" in text or "no customer_id found" in text:
+        return "GoMarble is connected but no ad account is linked yet."
+    return ""
 
 
 def build_weekly_report() -> dict:
@@ -179,9 +192,11 @@ def format_weekly_message(report: dict) -> str:
     if g_line or m_line:
         ads_block = "📣 Ads\n" + "\n".join(x for x in [g_line, m_line] if x)
         if ads["blended_roas"]:
-            ads_block += f"\nBlended ROAS: {ads['blended_roas']:.1f}x"
+            ads_block += f"\nReturn on ad spend: {ads['blended_roas']:.1f}x"
     else:
-        ads_block = "📣 Ads\n—"
+        # Surface a short reason if we hit a known GoMarble account/billing limit.
+        reason = _ads_empty_reason(ads.get("errors", []))
+        ads_block = "📣 Ads\n" + (reason or "No spend detected in the window.")
 
     mtd = report["mtd"]
     ms = mtd["sales"]

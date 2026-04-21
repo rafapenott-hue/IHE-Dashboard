@@ -182,13 +182,13 @@ def _meta_metrics(start, end, errors) -> dict:
     except Exception as e:
         errors.append(f"GoMarble Meta: {_unwrap_error(e)}")
         return {"spend": 0, "revenue": 0, "conversions": 0, "roas": 0}
-    # DEBUG: surface the top-level shape of the response so we know the parser matches
-    import json as _json
-    try:
-        preview = _json.dumps(payload, default=str)[:400] if payload else "empty"
-    except Exception:
-        preview = str(payload)[:400]
-    errors.append(f"Meta DEBUG payload preview: {preview}")
+
+    # GoMarble returns a JSON object with a top-level "message" field when the
+    # call is rejected by their own plan/billing layer (e.g. account limit).
+    # Surface that so the digest can explain why ads data is missing.
+    if isinstance(payload, dict) and "message" in payload and "data" not in payload:
+        errors.append(f"GoMarble Meta: {str(payload.get('message', ''))[:400]}")
+        return {"spend": 0, "revenue": 0, "conversions": 0, "roas": 0}
 
     data = payload.get("data", []) if payload else []
     spend = sum(float(d.get("spend", 0)) for d in data)
